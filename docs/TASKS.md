@@ -23,12 +23,13 @@
 
 ## Milestone 2 — Supabase
 
-- [ ] Supabaseプロジェクト
-- [ ] Googleログイン
-- [ ] DBマイグレーション
-- [ ] RLS
-- [ ] ToDo CRUD
-- [ ] ユーザー設定
+- [x] Supabaseプロジェクト
+- [x] Googleログイン（Provider設定は手動）
+- [x] DBマイグレーション
+- [x] RLS
+- [x] ToDo CRUD
+- [x] ユーザー設定
+- [ ] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する
 
 ## Milestone 3 — Calendar read
 
@@ -69,4 +70,4 @@
 
 ## Current task
 
-Milestone 1のローカルTasks・ルーティン管理まで。Supabaseや外部APIとの接続は行わない。
+Milestone 2のSupabase基盤まで。Google OAuth ProviderのClient ID / Secret設定は手動で行う。

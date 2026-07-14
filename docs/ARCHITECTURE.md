@@ -58,14 +58,13 @@ AIは計画案を返すだけで、実際の予定作成はサーバーが検証
 例:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 - `OPENAI_API_KEY`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `NEXT_PUBLIC_APP_URL`
 
-サービスロールキー、OpenAI APIキー、Googleクライアントシークレットはサーバー専用。
+OpenAI APIキー、Googleクライアントシークレットはサーバー専用。現在のSupabase基盤はservice roleキーを使用しない。
 
 ## 6. Deployment
 
