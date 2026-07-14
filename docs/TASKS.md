@@ -2,21 +2,24 @@
 
 ## Milestone 0 — Repository bootstrap
 
-- [ ] Next.js + TypeScript + Tailwind初期化
-- [ ] ESLint設定
-- [ ] 環境変数サンプル
+- [x] Next.js + TypeScript + Tailwind初期化
+- [x] ESLint設定
+- [x] 環境変数サンプル
 - [ ] 基本ディレクトリ作成
 - [ ] CIでlint/typecheck/build
-- [ ] モバイル用アプリシェル
+- [x] モバイル用アプリシェル
 
 ## Milestone 1 — Local UI prototype
 
-- [ ] Today画面
-- [ ] Tasks画面
-- [ ] Calendar仮画面
-- [ ] Review仮画面
-- [ ] ダミーデータ
-- [ ] タスク作成モーダル
+- [x] Today画面
+- [x] Tasks画面
+- [x] Calendar仮画面
+- [x] Review仮画面
+- [x] ダミーデータ
+- [x] タスク作成モーダル
+- [x] 通常タスクのlocalStorage CRUDと自動分類
+- [x] ルーティン設定と日付別完了履歴
+- [x] Todayへの当日ルーティン表示
 
 ## Milestone 2 — Supabase
 
@@ -66,4 +69,4 @@
 
 ## Current task
 
-Milestone 0とMilestone 1のうち、データ連携を伴わないUIプロトタイプまで。
+Milestone 1のローカルTasks・ルーティン管理まで。Supabaseや外部APIとの接続は行わない。
