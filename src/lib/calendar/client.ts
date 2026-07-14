@@ -11,7 +11,8 @@ async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function getCalendarConnection(signal?: AbortSignal) { return jsonRequest<CalendarConnectionStatus>('/api/calendar/connection', { signal }); }
+export function prepareCalendarConnection() { return jsonRequest<{ ready: true }>('/api/calendar/connect', { method: 'POST' }); }
 export function getCalendars(signal?: AbortSignal) { return jsonRequest<{ calendars: GoogleCalendarSummary[] }>('/api/calendar/calendars', { signal }); }
 export function getCalendarEvents(timeMin: string, timeMax: string, signal?: AbortSignal) { const query = new URLSearchParams({ timeMin, timeMax }); return jsonRequest<{ events: ExternalCalendarEvent[] }>(`/api/calendar/events?${query}`, { signal }); }
 export function putCalendarSelection(calendarIds: string[]) { return jsonRequest<{ selectedCalendarIds: string[] }>('/api/calendar/calendars', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ calendarIds }) }); }
-export function deleteCalendarConnection() { return jsonRequest<{ disconnected: boolean }>('/api/calendar/connection', { method: 'DELETE' }); }
+export function deleteCalendarConnection() { return jsonRequest<{ disconnected: boolean; googleRevoked: boolean }>('/api/calendar/connection', { method: 'DELETE' }); }

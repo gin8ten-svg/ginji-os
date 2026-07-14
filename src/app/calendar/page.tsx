@@ -8,11 +8,12 @@ import { LoadingState } from '@/components/loading-state';
 import { useTaskData } from '@/components/task-data-provider';
 import { formatDueAt, isRoutineScheduled, shiftTokyoDate, tokyoDateKey } from '@/lib/date-time';
 import { isOverdueTask, monthGrid, monthShift } from '@/lib/practical-mvp';
+import { externalEventCoversDate } from '@/lib/calendar/event-dates';
 import { useTokyoDateKey } from '@/lib/use-tokyo-date';
 import type { ExternalCalendarEvent } from '@/types/calendar';
 
 const weekdayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-const eventDate = (event: ExternalCalendarEvent) => event.allDay ? event.start : tokyoDateKey(new Date(event.start));
+const eventCoversDate = (event: ExternalCalendarEvent, date: string) => event.allDay ? externalEventCoversDate(event, date) : tokyoDateKey(new Date(event.start)) === date;
 
 export default function CalendarPage() {
   const { store, isLoading, error, retry } = useTaskData();
@@ -27,7 +28,7 @@ export default function CalendarPage() {
   const calendarRange = dates.length ? { timeMin: new Date(`${dates[0]}T00:00:00+09:00`).toISOString(), timeMax: new Date(`${shiftTokyoDate(dates.at(-1) as string, 1)}T00:00:00+09:00`).toISOString() } : null;
   const selectedTasks = useMemo(() => store?.tasks.filter((task) => task.dueAt && tokyoDateKey(new Date(task.dueAt)) === selected).sort((a, b) => b.priority - a.priority) ?? [], [selected, store?.tasks]);
   const selectedRoutines = useMemo(() => selected ? store?.routines.filter((routine) => isRoutineScheduled(routine, selected)) ?? [] : [], [selected, store?.routines]);
-  const selectedExternalEvents = useMemo(() => selected ? externalEvents.filter((event) => eventDate(event) === selected) : [], [externalEvents, selected]);
+  const selectedExternalEvents = useMemo(() => selected ? externalEvents.filter((event) => eventCoversDate(event, selected)) : [], [externalEvents, selected]);
   const completionSet = new Set(store?.routineCompletions.map((item) => `${item.date}:${item.routineId}`) ?? []);
   const backToToday = () => { setSelectedDate(null); setMonthOffset(0); };
 
@@ -45,7 +46,7 @@ export default function CalendarPage() {
           const taskCount = store.tasks.filter((task) => task.dueAt && tokyoDateKey(new Date(task.dueAt)) === date).length;
           const scheduled = store.routines.filter((routine) => isRoutineScheduled(routine, date));
           const completed = scheduled.filter((routine) => completionSet.has(`${date}:${routine.id}`)).length;
-          const googleCount = externalEvents.filter((event) => eventDate(event) === date).length;
+          const googleCount = externalEvents.filter((event) => eventCoversDate(event, date)).length;
           return <button key={date} type="button" onClick={() => setSelectedDate(date)} aria-pressed={selected === date} aria-label={`${date} タスク${taskCount}件 ルーティン${completed}/${scheduled.length} Google予定${googleCount}件`} className={`min-h-20 rounded-xl border p-1 text-left transition ${selected === date ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500' : 'border-transparent hover:bg-slate-50'} ${inMonth ? '' : 'opacity-35'}`}><span className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-sm ${date === today ? 'bg-brand-600 font-semibold text-white' : ''}`}>{Number(date.slice(8, 10))}</span><span className="mt-1 block text-[10px] text-slate-600">タスク {taskCount}</span>{scheduled.length ? <span className="block text-[10px] text-violet-700">習慣 {completed}/{scheduled.length}</span> : null}{googleCount ? <span className="block text-[10px] font-medium text-blue-700">Google {googleCount}</span> : null}</button>;
         })}</div>
       </section>

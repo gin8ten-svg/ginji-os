@@ -22,6 +22,9 @@ Supabase Auth + Google OAuth。
 ### Calendar integration
 
 Google Calendar API。
+追加同意の開始ユーザーは用途分離した秘密鍵で署名した短命HttpOnly Cookieへ記録し、OAuth callback後の
+認証ユーザーと一致した場合だけ暗号化Refresh Tokenを保存する。APIはページ数・件数を制限し、個人データを
+返すレスポンスは `private, no-store` とする。
 
 Calendar権限は通常ログインから分離し、Calendar画面の明示的な接続操作でのみ
 `calendar.events.readonly` と `calendar.calendarlist.readonly` を要求する。Google API呼び出しは

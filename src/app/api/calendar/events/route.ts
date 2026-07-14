@@ -1,6 +1,7 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import type { NextRequest } from 'next/server';
 import { listGoogleEvents, validateEventRange } from '@/lib/calendar/google-api';
 import { calendarAccessContext, calendarErrorResponse } from '@/lib/calendar/server';
+import { calendarJson } from '@/lib/calendar/responses';
 
 export async function GET(request: NextRequest) {
   const context = await calendarAccessContext();
@@ -8,6 +9,6 @@ export async function GET(request: NextRequest) {
   try {
     const range = validateEventRange(request.nextUrl.searchParams.get('timeMin'), request.nextUrl.searchParams.get('timeMax'));
     const calendarIds = context.connection.selected_calendar_ids.length ? context.connection.selected_calendar_ids : ['primary'];
-    return NextResponse.json({ events: await listGoogleEvents(context.accessToken, calendarIds, range) });
+    return calendarJson({ events: await listGoogleEvents(context.accessToken, calendarIds, range) });
   } catch (error) { return calendarErrorResponse(error); }
 }

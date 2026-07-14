@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { calendarGoogleOAuthOptions } from '@/lib/auth/oauth-options';
-import { deleteCalendarConnection, getCalendarConnection, getCalendarEvents, getCalendars, putCalendarSelection } from '@/lib/calendar/client';
+import { deleteCalendarConnection, getCalendarConnection, getCalendarEvents, getCalendars, prepareCalendarConnection, putCalendarSelection } from '@/lib/calendar/client';
 import { createClient } from '@/lib/supabase/client';
 import type { CalendarConnectionStatus, ExternalCalendarEvent, GoogleCalendarSummary } from '@/types/calendar';
 
 interface Props { timeMin: string | null; timeMax: string | null; onEvents(events: ExternalCalendarEvent[]): void; }
-const errorMessages: Record<string, string> = { oauth_denied: 'Google Calendarの追加権限が許可されませんでした。', missing_code: 'Googleから認証情報が返されませんでした。', missing_refresh_token: 'Refresh Tokenを取得できませんでした。Google Calendarを再接続してください。', exchange_failed: 'Google Calendar接続を完了できませんでした。' };
+const errorMessages: Record<string, string> = { oauth_denied: 'Google Calendarの追加権限が許可されませんでした。', missing_code: 'Googleから認証情報が返されませんでした。', missing_refresh_token: 'Refresh Tokenを取得できませんでした。Google Calendarを再接続してください。', account_mismatch: '接続を開始したアカウントと認証後のアカウントが一致しません。もう一度お試しください。', exchange_failed: 'Google Calendar接続を完了できませんでした。' };
 
 export function CalendarConnectionPanel({ timeMin, timeMax, onEvents }: Props) {
   const params = useSearchParams();
@@ -46,14 +46,14 @@ export function CalendarConnectionPanel({ timeMin, timeMax, onEvents }: Props) {
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const connect = async () => {
     setSaving(true); setError(null);
-    const { error: oauthError } = await createClient().auth.signInWithOAuth({
-      provider: 'google',
-      options: calendarGoogleOAuthOptions(window.location.origin),
-    });
-    if (oauthError) { setError('Google Calendar接続を開始できませんでした。'); setSaving(false); }
+    try {
+      await prepareCalendarConnection();
+      const { error: oauthError } = await createClient().auth.signInWithOAuth({ provider: 'google', options: calendarGoogleOAuthOptions(window.location.origin) });
+      if (oauthError) throw oauthError;
+    } catch { setError('Google Calendar接続を開始できませんでした。'); setSaving(false); }
   };
   const save = async () => { setSaving(true); setError(null); try { const result = await putCalendarSelection(selectedIds); setConnection((current) => current ? { ...current, selectedCalendarIds: result.selectedCalendarIds } : current); setReload((value) => value + 1); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'Calendar選択を保存できませんでした。'); } finally { setSaving(false); } };
-  const disconnect = async () => { if (!window.confirm('Google Calendar接続を解除しますか？Googleログイン状態は維持されます。')) return; setSaving(true); setError(null); try { await deleteCalendarConnection(); setConnection({ connected: false, connectedAt: null, selectedCalendarIds: [], needsReconnect: false }); setCalendars([]); setSelectedIds([]); onEvents([]); } catch (deleteError) { setError(deleteError instanceof Error ? deleteError.message : '接続を解除できませんでした。'); } finally { setSaving(false); } };
+  const disconnect = async () => { if (!window.confirm('Ginji OS内のCalendar接続情報を削除します。Googleログイン状態は維持されます。Google側のアクセス権解除に失敗した場合は、Googleアカウント設定から取り消せます。続けますか？')) return; setSaving(true); setError(null); try { const result = await deleteCalendarConnection(); setConnection({ connected: false, connectedAt: null, selectedCalendarIds: [], needsReconnect: false }); setCalendars([]); setSelectedIds([]); onEvents([]); if (!result.googleRevoked) setError('Ginji OS内の接続は解除しました。Google側の権限はGoogleアカウント設定から取り消してください。'); } catch (deleteError) { setError(deleteError instanceof Error ? deleteError.message : '接続を解除できませんでした。'); } finally { setSaving(false); } };
 
   return <section className="rounded-3xl border border-blue-200 bg-white p-4 shadow-sm" aria-label="Google Calendar接続">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">Google Calendar</h3><p className="mt-1 text-sm text-slate-600">読み取り専用です。Ginji OSから予定を作成・変更・削除しません。</p></div>{connection?.connected && !connection.needsReconnect ? <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">接続済み</span> : null}</div>
