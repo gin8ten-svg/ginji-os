@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
+import { authCallbackUrl } from '@/lib/auth/urls';
 import { createClient } from '@/lib/supabase/client';
 import { getSupabasePublicEnv } from '@/lib/supabase/env';
 
@@ -22,10 +23,9 @@ function LoginContent() {
     setPending(true);
     setClientError(null);
     try {
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
       const { error: oauthError } = await createClient().auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: `${appUrl}/auth/callback`, queryParams: { access_type: 'offline', prompt: 'consent' } },
+        options: { redirectTo: authCallbackUrl(window.location.origin), queryParams: { access_type: 'offline', prompt: 'consent' } },
       });
       if (oauthError) throw oauthError;
     } catch (loginError) {
