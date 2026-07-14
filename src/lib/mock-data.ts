@@ -1,17 +1,3 @@
-export type TaskStatus = 'inbox' | 'today' | 'upcoming' | 'overdue' | 'completed';
-
-export interface TaskItem {
-  id: string;
-  title: string;
-  description: string;
-  status: TaskStatus;
-  category: string;
-  priority: 'high' | 'medium' | 'low';
-  estimate: string;
-  dueLabel: string;
-  completed?: boolean;
-}
-
 export interface TimelineItem {
   time: string;
   title: string;
@@ -25,60 +11,6 @@ export interface ReviewItem {
   actual: string;
   rate: string;
 }
-
-export const tasks: TaskItem[] = [
-  {
-    id: '1',
-    title: '営業資料の修正',
-    description: '顧客向け提案資料の表紙を更新',
-    status: 'today',
-    category: 'Work',
-    priority: 'high',
-    estimate: '60m',
-    dueLabel: '今日',
-  },
-  {
-    id: '2',
-    title: '英語の復習',
-    description: '単語を30分だけ確認',
-    status: 'today',
-    category: 'Learning',
-    priority: 'medium',
-    estimate: '30m',
-    dueLabel: '今日',
-  },
-  {
-    id: '3',
-    title: '家計の見直し',
-    description: '先月の支出をざっと確認',
-    status: 'upcoming',
-    category: 'Life',
-    priority: 'low',
-    estimate: '20m',
-    dueLabel: '明日',
-  },
-  {
-    id: '4',
-    title: 'ポートフォリオ更新',
-    description: '最新の成果を追加',
-    status: 'overdue',
-    category: 'Work',
-    priority: 'high',
-    estimate: '90m',
-    dueLabel: '昨日',
-  },
-  {
-    id: '5',
-    title: '読書',
-    description: '技術書を20分読む',
-    status: 'completed',
-    category: 'Learning',
-    priority: 'low',
-    estimate: '20m',
-    dueLabel: '完了',
-    completed: true,
-  },
-];
 
 export const timeline: TimelineItem[] = [
   { time: '09:00', title: '朝会', type: 'fixed', note: 'チーム共有' },

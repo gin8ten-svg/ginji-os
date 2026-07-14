@@ -44,6 +44,42 @@ Supabase Authのユーザーに紐づく設定。
 | name | text |
 | created_at | timestamptz |
 
+## routines
+
+繰り返し設定の本体。ルーティン自体には完了状態を持たせない。
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid | PK |
+| user_id | uuid | indexed |
+| name | text | required |
+| description | text | nullable |
+| frequency_type | text | daily/weekdays |
+| weekdays | smallint[] | 0（日）〜6（土）、曜日指定時に使用 |
+| estimated_minutes | int | required |
+| priority | int | 1-5 |
+| category_id | uuid | nullable |
+| available_start_time | time | nullable |
+| available_end_time | time | nullable |
+| is_active | boolean | default true |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+## routine_completions
+
+ルーティンの日付ごとの実行履歴。ユーザータイムゾーン上の対象日を保存する。
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid | PK |
+| user_id | uuid | indexed |
+| routine_id | uuid | routines FK |
+| target_date | date | Asia/TokyoなどユーザーTZ上の日付 |
+| completed_at | timestamptz | |
+
+`routine_id, target_date` に一意制約を付ける。ルーティン削除時の履歴削除方針を
+マイグレーション時に明示し、すべての行へユーザー単位のRLSを適用する。
+
 ## calendar_connections
 
 | Column | Type | Notes |
@@ -103,7 +139,7 @@ Supabase Authのユーザーに紐づく設定。
 
 ## RLS policy principle
 
-すべてのユーザー所有テーブルで、`auth.uid() = user_id` の行だけをSELECT、INSERT、UPDATE、DELETE可能にする。
+すべてのユーザー所有テーブル（routines、routine_completionsを含む）で、`auth.uid() = user_id` の行だけをSELECT、INSERT、UPDATE、DELETE可能にする。
 
 `calendar_connections` のトークン列は通常のクライアントクエリで取得させない。
 必要であれば別スキーマまたはサーバー専用テーブルへ分離する。

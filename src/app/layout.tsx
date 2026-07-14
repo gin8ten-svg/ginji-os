@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { AppShell } from '@/components/app-shell';
+import { TaskDataProvider } from '@/components/task-data-provider';
 
 export const metadata: Metadata = {
   title: 'Ginji OS',
@@ -11,7 +12,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ja">
       <body>
-        <AppShell>{children}</AppShell>
+        <TaskDataProvider>
+          <AppShell>{children}</AppShell>
+        </TaskDataProvider>
       </body>
     </html>
   );
