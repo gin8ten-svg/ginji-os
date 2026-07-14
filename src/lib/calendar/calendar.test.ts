@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { safeAuthDestination } from '@/lib/auth/urls';
 import { disconnectCalendarConnection, publicConnectionStatus, saveCalendarConnection } from '@/lib/calendar/connection';
-import { CalendarReconnectError, CalendarServiceError, listGoogleCalendars, listGoogleEvents, normalizeGoogleEvent, refreshGoogleAccessToken, revokeGoogleToken, validateCalendarIdInput, validateCalendarSelection, validateEventRange } from '@/lib/calendar/google-api';
+import { CalendarOAuthConfigurationError, CalendarReconnectError, CalendarServiceError, listGoogleCalendars, listGoogleEvents, normalizeGoogleEvent, refreshGoogleAccessToken, revokeGoogleToken, validateCalendarIdInput, validateCalendarSelection, validateEventRange } from '@/lib/calendar/google-api';
 import { decryptRefreshToken, encryptRefreshToken } from '@/lib/calendar/token-crypto';
 import { datesCoveredByAllDayEvent } from '@/lib/calendar/event-dates';
 import { createCalendarOAuthState, verifyCalendarOAuthState } from '@/lib/calendar/oauth-state';
@@ -26,6 +26,8 @@ describe('Calendar token encryption', () => {
 describe('Google OAuth token refresh', () => {
   it('Access Tokenを取得する', async () => { const access = await refreshGoogleAccessToken('refresh-secret', async (_url, init) => { expect(String(init?.body)).toContain('grant_type=refresh_token'); return json({ access_token: 'access-token' }); }); expect(access).toBe('access-token'); });
   it('invalid_grantを再接続エラーにする', async () => { await expect(refreshGoogleAccessToken('bad', async () => json({ error: 'invalid_grant', error_description: 'sensitive' }, 400))).rejects.toBeInstanceOf(CalendarReconnectError); });
+  it.each(['invalid_client', 'unauthorized_client'])('OAuth client設定エラーを秘密情報なしで分類する', async (code) => { await expect(refreshGoogleAccessToken('never-return-this', async () => json({ error: code, error_description: 'provider-sensitive-detail' }, 401))).rejects.toBeInstanceOf(CalendarOAuthConfigurationError); });
+  it('その他のToken更新失敗をGoogle生レスポンスなしで分類する', async () => { await expect(refreshGoogleAccessToken('never-return-this', async () => json({ error: 'temporarily_unavailable', error_description: 'provider-sensitive-detail' }, 503))).rejects.toThrow('認証を更新できません'); });
   it('timeoutを安全なエラーにする', async () => { const hanging = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))) as typeof fetch; await expect(refreshGoogleAccessToken('refresh', hanging, 1)).rejects.toThrow('タイムアウト'); });
 });
 

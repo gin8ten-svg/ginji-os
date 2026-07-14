@@ -3,6 +3,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 const VERSION = 'v1';
 
+export class CalendarStoredTokenError extends Error {}
+
 function encryptionKey(encoded = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY): Buffer {
   if (!encoded) throw new Error('Calendar token encryption is not configured.');
   if (!/^(?:[A-Za-z0-9+/]{4}){10}[A-Za-z0-9+/]{3}=$/.test(encoded)) throw new Error('Calendar token encryption is not configured.');
@@ -33,6 +35,6 @@ export function decryptRefreshToken(value: string, encodedKey?: string): string 
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(Buffer.from(ciphertextValue, 'base64url')), decipher.final()]).toString('utf8');
   } catch {
-    throw new Error('Stored calendar authorization is invalid.');
+    throw new CalendarStoredTokenError('Stored calendar authorization is invalid.');
   }
 }
