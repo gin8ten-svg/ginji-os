@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/empty-state';
 import { ErrorState } from '@/components/error-state';
 import { LoadingState } from '@/components/loading-state';
 import { TaskFormModal } from '@/components/task-form-modal';
+import { PlannerPanel } from '@/components/planner-panel';
 import { useTaskData } from '@/components/task-data-provider';
 import { formatDueAt, isRoutineScheduled, tokyoDateKey } from '@/lib/date-time';
 import { isOverdueTask, todayDashboardTasks } from '@/lib/practical-mvp';
@@ -56,6 +57,8 @@ export default function TodayPage() {
         <div className="flex items-center justify-between"><div><h3 className="text-lg font-semibold">今日のルーティン</h3><p className="mt-1 text-xs text-slate-500">曜日設定に基づく実施対象</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-800">{completedRoutines}/{routines.length}</span></div>
         {routines.length === 0 ? <p className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">今日実施するルーティンはありません。</p> : <div className="mt-4 space-y-3">{routines.map((routine) => { const completed = completedRoutineIds.has(routine.id); return <article key={routine.id} className="flex items-start gap-3 rounded-2xl bg-violet-50 p-3"><button disabled={isSaving} type="button" onClick={() => toggleRoutineCompletion(routine.id, today)} aria-label={`${routine.name}を${completed ? '未完了に戻す' : '完了にする'}`} className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 disabled:opacity-50 ${completed ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-violet-400 bg-white text-violet-700'}`}>{completed ? '✓' : '○'}</button><div className="min-w-0"><h4 className={`break-words font-semibold ${completed ? 'text-slate-500 line-through' : ''}`}>{routine.name}</h4><p className="mt-1 text-sm text-slate-600">{routine.estimatedMinutes}分・優先度 {routine.priority}</p></div></article>; })}</div>}
       </section>
+
+      <PlannerPanel store={store} />
     </> : null}
 
     {quickAdd && today ? <TaskFormModal initialDueAt={new Date(`${today}T23:59:00+09:00`).toISOString()} isSubmitting={isSaving} onClose={() => setQuickAdd(false)} onSave={saveTask} /> : null}
