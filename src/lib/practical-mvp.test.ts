@@ -3,7 +3,7 @@ import { buildReviewSummary, filterAndSortTasks, monthGrid, monthShift, todayDas
 import type { Routine, Task, TaskStore } from '@/types/tasks';
 
 const base = '2026-07-15T00:00:00.000Z';
-const task = (id: string, dueAt: string | null, priority: Task['priority'] = 3, completedAt: string | null = null): Task => ({ id, title: id, description: '', dueAt, priority, estimatedMinutes: 30, category: priority === 5 ? '重要' : '通常', completedAt, createdAt: base, updatedAt: base, source: 'user' });
+const task = (id: string, dueAt: string | null, priority: Task['priority'] = 3, completedAt: string | null = null): Task => ({ id, title: id, description: '', dueAt, priority, estimatedMinutes: 30, remainingMinutes: completedAt ? 0 : 30, splittable: true, minimumBlockMinutes: 25, category: priority === 5 ? '重要' : '通常', completedAt, createdAt: base, updatedAt: base, source: 'user' });
 const routine: Routine = { id: 'routine', name: '毎日', description: '', frequency: { type: 'daily' }, estimatedMinutes: 10, priority: 3, category: '生活', availableStartTime: null, availableEndTime: null, isActive: true, createdAt: base, updatedAt: base, source: 'user' };
 
 describe('practical MVP selectors', () => {

@@ -7,7 +7,7 @@ const timestamps = { created_at: '2026-07-15T00:00:00.000Z', updated_at: '2026-0
 describe('Supabase row converters', () => {
   it('task行をアプリ型へ変換する', () => {
     const row: TaskRow = { id: 'task-id', user_id: 'user-id', title: 'Task', description: null, status: 'inbox', priority: 4, due_at: null, estimated_minutes: 30, remaining_minutes: 30, splittable: true, minimum_block_minutes: 25, category_id: 'category-id', completed_at: null, ...timestamps };
-    expect(taskFromRow(row, new Map([['category-id', '仕事']]))).toMatchObject({ id: 'task-id', description: '', priority: 4, category: '仕事', source: 'user' });
+    expect(taskFromRow(row, new Map([['category-id', '仕事']]))).toMatchObject({ id: 'task-id', description: '', priority: 4, category: '仕事', remainingMinutes: 30, splittable: true, minimumBlockMinutes: 25, source: 'user' });
   });
 
   it('曜日ルーティンとtime型を変換する', () => {

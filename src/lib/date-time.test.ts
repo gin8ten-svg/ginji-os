@@ -5,7 +5,7 @@ import type { Routine, Task } from '@/types/tasks';
 const createdAt = '2026-07-14T00:00:00.000Z';
 
 function task(dueAt: string | null): Task {
-  return { id: 'task-1', title: 'Test', description: '', dueAt, priority: 3, estimatedMinutes: 30, category: '', completedAt: null, createdAt, updatedAt: createdAt, source: 'user' };
+  return { id: 'task-1', title: 'Test', description: '', dueAt, priority: 3, estimatedMinutes: 30, remainingMinutes: 30, splittable: true, minimumBlockMinutes: 25, category: '', completedAt: null, createdAt, updatedAt: createdAt, source: 'user' };
 }
 
 function routine(frequency: Routine['frequency']): Routine {

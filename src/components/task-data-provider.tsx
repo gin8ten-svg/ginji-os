@@ -1,13 +1,14 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { tokyoDateKey } from '@/lib/date-time';
 import { SupabaseTaskRepository } from '@/lib/supabase-task-repository';
 import { createClient } from '@/lib/supabase/client';
 import { getSupabasePublicEnv } from '@/lib/supabase/env';
 import { LocalTaskRepository } from '@/lib/task-repository';
+import { LocalTaskStoreAdapter, SupabaseTaskStoreAdapter, type AsyncTaskStoreAdapter } from '@/lib/task-store-adapter';
 import { repositoryMode } from '@/lib/repository-mode';
-import type { Routine, RoutineCompletion, Task, TaskStore } from '@/types/tasks';
+import type { Routine, Task, TaskStore } from '@/types/tasks';
 
 interface TaskDataContextValue {
   store: TaskStore | null;
@@ -20,11 +21,11 @@ interface TaskDataContextValue {
   recoveryNotice: string | null;
   retry(): void;
   clearFeedback(): void;
-  saveTask(task: Task): void;
-  deleteTask(id: string): void;
-  saveRoutine(routine: Routine): void;
-  deleteRoutine(id: string): void;
-  toggleRoutineCompletion(routineId: string, date?: string): void;
+  saveTask(task: Task): Promise<void>;
+  deleteTask(id: string): Promise<void>;
+  saveRoutine(routine: Routine): Promise<void>;
+  deleteRoutine(id: string): Promise<void>;
+  toggleRoutineCompletion(routineId: string, date?: string): Promise<void>;
 }
 
 const TaskDataContext = createContext<TaskDataContextValue | null>(null);
@@ -39,7 +40,8 @@ export function TaskDataProvider({ children }: { children: React.ReactNode }) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const localRepository = useMemo(() => new LocalTaskRepository(), []);
-  const [remoteRepository, setRemoteRepository] = useState<SupabaseTaskRepository | null>(null);
+  const adapterRef = useRef<AsyncTaskStoreAdapter | null>(null);
+  const savingRef = useRef(false);
   const [loadVersion, setLoadVersion] = useState(0);
 
   useEffect(() => {
@@ -54,17 +56,20 @@ export function TaskDataProvider({ children }: { children: React.ReactNode }) {
           const { data, error: authError } = await client.auth.getUser();
           if (authError && authError.name !== 'AuthSessionMissingError') throw authError;
           if (repositoryMode(configured, data.user?.id) === 'supabase' && data.user) {
-            const repository = new SupabaseTaskRepository(client, data.user.id);
-            const remoteStore = await repository.loadStore();
+            const adapter = new SupabaseTaskStoreAdapter(new SupabaseTaskRepository(client, data.user.id));
+            const result = await adapter.load();
             if (!active) return;
-            setRemoteRepository(repository);
+            adapterRef.current = adapter;
             setIsAuthenticated(true);
-            setStore(remoteStore);
+            setStore(result.store);
             return;
           }
         }
-        const result = localRepository.load();
+        const adapter = new LocalTaskStoreAdapter(localRepository);
+        const result = await adapter.load();
         if (!active) return;
+        adapterRef.current = adapter;
+        setIsAuthenticated(false);
         setStore(result.store);
         if (result.recovered) setRecoveryNotice('破損した保存データを退避し、安全な初期状態へ復旧しました。');
       } catch (loadError) {
@@ -81,81 +86,40 @@ export function TaskDataProvider({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, [loadVersion, localRepository]);
 
-  const runRemote = useCallback(async (operation: () => Promise<void>, message: string) => {
-    if (isSaving) return;
+  const runOperation = useCallback(async (operation: (adapter: AsyncTaskStoreAdapter) => Promise<TaskStore>, message: string) => {
+    if (savingRef.current) throw new Error('保存処理が進行中です。');
+    const adapter = adapterRef.current;
+    if (!adapter) throw new Error('データをまだ読み込んでいます。');
+    savingRef.current = true;
     setIsSaving(true);
     setError(null);
     setSuccessMessage(null);
     try {
-      await operation();
+      const next = await operation(adapter);
+      setStore(next);
       setSuccessMessage(message);
     } catch (operationError) {
       setError(operationError instanceof Error ? operationError.message : '変更を保存できませんでした。');
+      throw operationError;
     } finally {
+      savingRef.current = false;
       setIsSaving(false);
     }
-  }, [isSaving]);
-
-  const updateLocal = useCallback((updater: (current: TaskStore) => TaskStore) => {
-    setError(null);
-    setSuccessMessage(null);
-    setStore((current) => {
-      if (!current) return current;
-      const next = updater(current);
-      try {
-        localRepository.save(next);
-        setSuccessMessage('端末に保存しました。');
-      } catch {
-        setError('変更を端末に保存できませんでした。');
-      }
-      return next;
-    });
-  }, [localRepository]);
+  }, []);
 
   const value = useMemo<TaskDataContextValue>(() => ({
     store, isLoading, isHydrated, isAuthenticated, isSaving, error, successMessage, recoveryNotice,
     retry: () => setLoadVersion((version) => version + 1),
     clearFeedback: () => { setError(null); setSuccessMessage(null); },
-    saveTask: (task) => {
-      if (!remoteRepository) {
-        updateLocal((current) => ({ ...current, tasks: current.tasks.some((item) => item.id === task.id) ? current.tasks.map((item) => item.id === task.id ? task : item) : [task, ...current.tasks] }));
-        return;
-      }
-      const exists = store?.tasks.some((item) => item.id === task.id) ?? false;
-      void runRemote(async () => {
-        const saved = exists ? await remoteRepository.updateTask(task) : await remoteRepository.createTask(task);
-        setStore((current) => current ? ({ ...current, tasks: exists ? current.tasks.map((item) => item.id === saved.id ? saved : item) : [saved, ...current.tasks] }) : current);
-      }, exists ? 'タスクを更新しました。' : 'タスクを作成しました。');
-    },
-    deleteTask: (id) => {
-      if (!remoteRepository) return updateLocal((current) => ({ ...current, tasks: current.tasks.filter((task) => task.id !== id) }));
-      void runRemote(async () => { await remoteRepository.deleteTask(id); setStore((current) => current ? ({ ...current, tasks: current.tasks.filter((task) => task.id !== id) }) : current); }, 'タスクを削除しました。');
-    },
-    saveRoutine: (routine) => {
-      if (!remoteRepository) return updateLocal((current) => ({ ...current, routines: current.routines.some((item) => item.id === routine.id) ? current.routines.map((item) => item.id === routine.id ? routine : item) : [routine, ...current.routines] }));
-      const exists = store?.routines.some((item) => item.id === routine.id) ?? false;
-      void runRemote(async () => {
-        const saved = exists ? await remoteRepository.updateRoutine(routine) : await remoteRepository.createRoutine(routine);
-        setStore((current) => current ? ({ ...current, routines: exists ? current.routines.map((item) => item.id === saved.id ? saved : item) : [saved, ...current.routines] }) : current);
-      }, exists ? 'ルーティンを更新しました。' : 'ルーティンを作成しました。');
-    },
-    deleteRoutine: (id) => {
-      const remove = (current: TaskStore) => ({ ...current, routines: current.routines.filter((routine) => routine.id !== id), routineCompletions: current.routineCompletions.filter((completion) => completion.routineId !== id) });
-      if (!remoteRepository) return updateLocal(remove);
-      void runRemote(async () => { await remoteRepository.deleteRoutine(id); setStore((current) => current ? remove(current) : current); }, 'ルーティンを削除しました。');
-    },
+    saveTask: (task) => runOperation((adapter) => adapter.saveTask(task), store?.tasks.some((item) => item.id === task.id) ? 'タスクを更新しました。' : 'タスクを作成しました。'),
+    deleteTask: (id) => runOperation((adapter) => adapter.deleteTask(id), 'タスクを削除しました。'),
+    saveRoutine: (routine) => runOperation((adapter) => adapter.saveRoutine(routine), store?.routines.some((item) => item.id === routine.id) ? 'ルーティンを更新しました。' : 'ルーティンを作成しました。'),
+    deleteRoutine: (id) => runOperation((adapter) => adapter.deleteRoutine(id), 'ルーティンを削除しました。'),
     toggleRoutineCompletion: (routineId, date = tokyoDateKey()) => {
       const completed = !(store?.routineCompletions.some((item) => item.routineId === routineId && item.date === date) ?? false);
-      const toggle = (current: TaskStore) => {
-        const routineCompletions: RoutineCompletion[] = completed
-          ? [...current.routineCompletions, { routineId, date, completedAt: new Date().toISOString() }]
-          : current.routineCompletions.filter((item) => item.routineId !== routineId || item.date !== date);
-        return { ...current, routineCompletions };
-      };
-      if (!remoteRepository) return updateLocal(toggle);
-      void runRemote(async () => { await remoteRepository.setRoutineCompletion(routineId, date, completed); setStore((current) => current ? toggle(current) : current); }, completed ? 'ルーティンを完了しました。' : 'ルーティンを未完了に戻しました。');
+      return runOperation((adapter) => adapter.setRoutineCompletion(routineId, date, completed), completed ? 'ルーティンを完了しました。' : 'ルーティンを未完了に戻しました。');
     },
-  }), [error, isAuthenticated, isHydrated, isLoading, isSaving, recoveryNotice, remoteRepository, runRemote, store, successMessage, updateLocal]);
+  }), [error, isAuthenticated, isHydrated, isLoading, isSaving, recoveryNotice, runOperation, store, successMessage]);
 
   return <TaskDataContext.Provider value={value}>{children}</TaskDataContext.Provider>;
 }

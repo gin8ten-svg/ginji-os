@@ -10,6 +10,9 @@ export interface Task {
   dueAt: string | null;
   priority: Priority;
   estimatedMinutes: number;
+  remainingMinutes: number;
+  splittable: boolean;
+  minimumBlockMinutes: number;
   category: string;
   completedAt: string | null;
   createdAt: string;

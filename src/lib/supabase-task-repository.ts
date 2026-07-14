@@ -17,7 +17,7 @@ export class SupabaseTaskRepository {
   ) {}
 
   private async categories() {
-    const { data, error } = await this.client.from('categories').select('*');
+    const { data, error } = await this.client.from('categories').select('*').eq('user_id', this.userId);
     if (error) throw new SupabaseRepositoryError('カテゴリー取得', error.message);
     return categoryMap(data);
   }
@@ -27,22 +27,33 @@ export class SupabaseTaskRepository {
     if (!normalized) return null;
     const { data, error } = await this.client.from('categories')
       .upsert({ user_id: this.userId, name: normalized }, { onConflict: 'user_id,name' })
-      .select('id').single();
+      .select('id').eq('user_id', this.userId).single();
     if (error) throw new SupabaseRepositoryError('カテゴリー保存', error.message);
     return data.id;
   }
 
   async loadStore(): Promise<TaskStore> {
-    const [tasks, routines, routineCompletions] = await Promise.all([
-      this.listTasks(), this.listRoutines(), this.listRoutineCompletions(),
+    const [categories, taskResult, routineResult, completionResult] = await Promise.all([
+      this.categories(),
+      this.client.from('tasks').select('*').eq('user_id', this.userId).order('created_at', { ascending: false }),
+      this.client.from('routines').select('*').eq('user_id', this.userId).order('created_at', { ascending: false }),
+      this.client.from('routine_completions').select('*').eq('user_id', this.userId),
     ]);
-    return { version: 1, tasks, routines, routineCompletions };
+    if (taskResult.error) throw new SupabaseRepositoryError('タスク取得', taskResult.error.message);
+    if (routineResult.error) throw new SupabaseRepositoryError('ルーティン取得', routineResult.error.message);
+    if (completionResult.error) throw new SupabaseRepositoryError('実行履歴取得', completionResult.error.message);
+    return {
+      version: 1,
+      tasks: taskResult.data.map((row) => taskFromRow(row, categories)),
+      routines: routineResult.data.map((row) => routineFromRow(row, categories)),
+      routineCompletions: completionResult.data.map(completionFromRow),
+    };
   }
 
   async listTasks(): Promise<Task[]> {
     const [categories, result] = await Promise.all([
       this.categories(),
-      this.client.from('tasks').select('*').order('created_at', { ascending: false }),
+      this.client.from('tasks').select('*').eq('user_id', this.userId).order('created_at', { ascending: false }),
     ]);
     if (result.error) throw new SupabaseRepositoryError('タスク取得', result.error.message);
     return result.data.map((row) => taskFromRow(row, categories));
@@ -53,11 +64,12 @@ export class SupabaseTaskRepository {
     const { data, error } = await this.client.from('tasks').insert({
       user_id: this.userId, title: task.title, description: task.description || null,
       status: task.completedAt ? 'completed' : 'inbox', priority: task.priority, due_at: task.dueAt,
-      estimated_minutes: task.estimatedMinutes, remaining_minutes: task.completedAt ? 0 : task.estimatedMinutes,
+      estimated_minutes: task.estimatedMinutes, remaining_minutes: task.remainingMinutes,
+      splittable: task.splittable, minimum_block_minutes: task.minimumBlockMinutes,
       category_id: categoryId, completed_at: task.completedAt,
-    }).select('*').single();
+    }).select('*').eq('user_id', this.userId).single();
     if (error) throw new SupabaseRepositoryError('タスク作成', error.message);
-    return taskFromRow(data, await this.categories());
+    return taskFromRow(data, categoryId ? new Map([[categoryId, task.category.trim()]]) : new Map());
   }
 
   async updateTask(task: Task): Promise<Task> {
@@ -65,22 +77,23 @@ export class SupabaseTaskRepository {
     const { data, error } = await this.client.from('tasks').update({
       title: task.title, description: task.description || null, status: task.completedAt ? 'completed' : 'inbox',
       priority: task.priority, due_at: task.dueAt, estimated_minutes: task.estimatedMinutes,
-      remaining_minutes: task.completedAt ? 0 : task.estimatedMinutes, category_id: categoryId,
+      remaining_minutes: task.remainingMinutes, splittable: task.splittable,
+      minimum_block_minutes: task.minimumBlockMinutes, category_id: categoryId,
       completed_at: task.completedAt,
-    }).eq('id', task.id).select('*').single();
+    }).eq('id', task.id).eq('user_id', this.userId).select('*').single();
     if (error) throw new SupabaseRepositoryError('タスク更新', error.message);
-    return taskFromRow(data, await this.categories());
+    return taskFromRow(data, categoryId ? new Map([[categoryId, task.category.trim()]]) : new Map());
   }
 
   async deleteTask(id: string): Promise<void> {
-    const { error } = await this.client.from('tasks').delete().eq('id', id);
+    const { error } = await this.client.from('tasks').delete().eq('id', id).eq('user_id', this.userId);
     if (error) throw new SupabaseRepositoryError('タスク削除', error.message);
   }
 
   async listRoutines(): Promise<Routine[]> {
     const [categories, result] = await Promise.all([
       this.categories(),
-      this.client.from('routines').select('*').order('created_at', { ascending: false }),
+      this.client.from('routines').select('*').eq('user_id', this.userId).order('created_at', { ascending: false }),
     ]);
     if (result.error) throw new SupabaseRepositoryError('ルーティン取得', result.error.message);
     return result.data.map((row) => routineFromRow(row, categories));
@@ -106,19 +119,19 @@ export class SupabaseTaskRepository {
     };
     const query = mode === 'insert'
       ? this.client.from('routines').insert(values)
-      : this.client.from('routines').update(values).eq('id', routine.id);
-    const { data, error } = await query.select('*').single();
+      : this.client.from('routines').update(values).eq('id', routine.id).eq('user_id', this.userId);
+    const { data, error } = await query.select('*').eq('user_id', this.userId).single();
     if (error) throw new SupabaseRepositoryError(`ルーティン${mode === 'insert' ? '作成' : '更新'}`, error.message);
-    return routineFromRow(data, await this.categories());
+    return routineFromRow(data, categoryId ? new Map([[categoryId, routine.category.trim()]]) : new Map());
   }
 
   async deleteRoutine(id: string): Promise<void> {
-    const { error } = await this.client.from('routines').delete().eq('id', id);
+    const { error } = await this.client.from('routines').delete().eq('id', id).eq('user_id', this.userId);
     if (error) throw new SupabaseRepositoryError('ルーティン削除', error.message);
   }
 
   async listRoutineCompletions(): Promise<RoutineCompletion[]> {
-    const { data, error } = await this.client.from('routine_completions').select('*');
+    const { data, error } = await this.client.from('routine_completions').select('*').eq('user_id', this.userId);
     if (error) throw new SupabaseRepositoryError('実行履歴取得', error.message);
     return data.map(completionFromRow);
   }
@@ -129,7 +142,7 @@ export class SupabaseTaskRepository {
           { user_id: this.userId, routine_id: routineId, target_date: date, completed_at: new Date().toISOString() },
           { onConflict: 'routine_id,target_date' },
         )
-      : this.client.from('routine_completions').delete().eq('routine_id', routineId).eq('target_date', date);
+      : this.client.from('routine_completions').delete().eq('routine_id', routineId).eq('target_date', date).eq('user_id', this.userId);
     const { error } = await query;
     if (error) throw new SupabaseRepositoryError('実行履歴更新', error.message);
   }
