@@ -1,6 +1,6 @@
 import 'server-only';
-import { CalendarReconnectError, refreshGoogleAccessToken } from '@/lib/calendar/google-api';
-import { decryptRefreshToken } from '@/lib/calendar/token-crypto';
+import { CalendarOAuthConfigurationError, CalendarReconnectError, CalendarServiceError, refreshGoogleAccessToken } from '@/lib/calendar/google-api';
+import { CalendarStoredTokenError, decryptRefreshToken } from '@/lib/calendar/token-crypto';
 import { calendarJson } from '@/lib/calendar/responses';
 import { createClient } from '@/lib/supabase/server';
 import type { CalendarConnectionRow } from '@/types/database';
@@ -35,6 +35,9 @@ export async function calendarAccessContext() {
       if (!await markCalendarNeedsReconnect(context.client, context.userId)) return { ok: false, response: calendarJson({ error: 'Google Calendar接続状態を更新できませんでした。', needsReconnect: true }, 500) } as const;
       return { ok: false, response: calendarJson({ error: 'Google Calendarへの再接続が必要です。', needsReconnect: true }, 409) } as const;
     }
+    if (error instanceof CalendarStoredTokenError) return { ok: false, response: calendarJson({ error: '保存済みのCalendar認証を復号できません。接続解除後に再接続してください。', diagnosticCode: 'stored_token_invalid' }, 502) } as const;
+    if (error instanceof CalendarOAuthConfigurationError) return { ok: false, response: calendarJson({ error: error.message, diagnosticCode: 'oauth_client_invalid' }, 502) } as const;
+    if (error instanceof CalendarServiceError) return { ok: false, response: calendarJson({ error: error.message, diagnosticCode: 'google_token_exchange_failed' }, 502) } as const;
     return { ok: false, response: calendarJson({ error: 'Google Calendarへ接続できませんでした。' }, 502) } as const;
   }
 }

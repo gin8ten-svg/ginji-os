@@ -3,6 +3,7 @@ import type { ExternalCalendarEvent, GoogleCalendarSummary } from '@/types/calen
 
 export class CalendarReconnectError extends Error {}
 export class CalendarServiceError extends Error {}
+export class CalendarOAuthConfigurationError extends Error {}
 type Fetcher = typeof fetch;
 const MAX_PAGES = 20;
 const MAX_CALENDARS = 1_000;
@@ -10,7 +11,7 @@ const MAX_EVENTS = 5_000;
 
 function configured(name: 'GOOGLE_OAUTH_CLIENT_ID' | 'GOOGLE_OAUTH_CLIENT_SECRET'): string {
   const value = process.env[name];
-  if (!value) throw new CalendarServiceError('Google Calendar連携のサーバー設定が未完了です。');
+  if (!value) throw new CalendarOAuthConfigurationError('Google OAuthのサーバー設定が未完了です。');
   return value;
 }
 
@@ -29,7 +30,9 @@ export async function refreshGoogleAccessToken(refreshToken: string, fetcher: Fe
   }, timeoutMs);
   const result: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    if (typeof result === 'object' && result !== null && 'error' in result && result.error === 'invalid_grant') throw new CalendarReconnectError('Google Calendarへの再接続が必要です。');
+    const providerCode = typeof result === 'object' && result !== null && 'error' in result && typeof result.error === 'string' ? result.error : null;
+    if (providerCode === 'invalid_grant') throw new CalendarReconnectError('Google Calendarへの再接続が必要です。');
+    if (providerCode === 'invalid_client' || providerCode === 'unauthorized_client') throw new CalendarOAuthConfigurationError('Google OAuthのClient IDまたはClient Secretが一致していません。');
     throw new CalendarServiceError('Google Calendarの認証を更新できませんでした。');
   }
   if (typeof result !== 'object' || result === null || !('access_token' in result) || typeof result.access_token !== 'string') throw new CalendarServiceError('Google Calendarの認証応答が不正です。');
