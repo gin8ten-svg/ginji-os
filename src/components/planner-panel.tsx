@@ -5,6 +5,7 @@ import { getCalendarConnection, getCalendarEvents } from '@/lib/calendar/client'
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
 import { PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
 import { approveCloudPlanningSession, createCloudPlanningSession, getCloudPlanningSession, listCloudPlanningSessions, PlanningClientError, rejectCloudPlanningSession } from '@/lib/planning/client';
+import { approvalModalOpenAfterResult, canCloseApprovalModal } from '@/lib/planning/approval-ui';
 import { tokyoDateKey } from '@/lib/date-time';
 import type { PlanningResult, ProposedTimeBlock } from '@/types/planning';
 import type { PlanningSessionDetail, PlanningSessionStatus } from '@/types/planning-session';
@@ -41,6 +42,13 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
     return () => activeCoordinator.abort();
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!confirming) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && canCloseApprovalModal(loading)) setConfirming(false); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [confirming, loading]);
+
   async function calculate() {
     const request = coordinator.current.begin();
     setLoading(true); setError(null); setStale(false);
@@ -60,10 +68,12 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
 
   async function approve() {
     if (!session || loading || session.status !== 'draft') return;
-    setConfirming(false); setLoading(true); setError(null);
+    setLoading(true); setError(null);
     try {
       setSession(isAuthenticated ? await approveCloudPlanningSession(session.sessionId) : { ...session, status: 'approved', approvedAt: new Date().toISOString() });
+      setConfirming(approvalModalOpenAfterResult('success'));
     } catch (cause) {
+      setConfirming(approvalModalOpenAfterResult('failure'));
       if (cause instanceof PlanningClientError && cause.code === 'PLAN_STALE') setStale(true);
       setError(cause instanceof Error ? cause.message : '計画案を承認できませんでした。');
     } finally { setLoading(false); }
@@ -95,7 +105,7 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
       <div className="grid gap-3 lg:grid-cols-2">{Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([date, blocks]) => <section key={date} className="rounded-2xl border border-slate-200 p-3"><h4 className="font-semibold">{date}</h4><div className="mt-2 space-y-2">{blocks.map((block) => <Block key={block.id} block={block} />)}</div></section>)}</div>
       {session.unscheduledTasks.length ? <section className="rounded-2xl bg-amber-50 p-4"><h4 className="font-semibold">配置できなかったタスク</h4>{session.unscheduledTasks.map((item) => <p key={item.taskId} className="mt-2 text-sm">{item.title} — {item.reason}</p>)}</section> : null}
     </div> : null}
-    {confirming ? <div role="dialog" aria-modal="true" aria-labelledby="approval-title" className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4"><div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl"><h4 id="approval-title" className="text-lg font-semibold">計画案を承認しますか？</h4><p className="mt-2 text-sm text-slate-600">最新データで再検証します。この時点ではGoogle Calendarへ書き込みません。</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setConfirming(false)} className="min-h-11 rounded-full px-4">キャンセル</button><button type="button" onClick={() => void approve()} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white">承認する</button></div></div></div> : null}
+    {confirming ? <div role="dialog" aria-modal="true" aria-labelledby="approval-title" onMouseDown={(event) => { if (canCloseApprovalModal(loading) && event.target === event.currentTarget) setConfirming(false); }} className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4"><div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl"><h4 id="approval-title" className="text-lg font-semibold">計画案を承認しますか？</h4><p className="mt-2 text-sm text-slate-600">最新データで再検証します。この時点ではGoogle Calendarへ書き込みません。</p>{error ? <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={loading} onClick={() => setConfirming(false)} className="min-h-11 rounded-full px-4 disabled:opacity-50">キャンセル</button><button type="button" disabled={loading} onClick={() => void approve()} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? '承認中…' : '承認する'}</button></div></div></div> : null}
   </section>;
 }
 

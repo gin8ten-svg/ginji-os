@@ -13,6 +13,15 @@ import type { PlanningSessionDetail, PlanningSessionSummary } from '@/types/plan
 import type { TaskStore } from '@/types/tasks';
 
 const warningText: Record<string, string> = { CALENDAR_NOT_CONNECTED: 'Google Calendar未接続のため、外部予定を反映していません。' };
+export const PLANNING_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const PLANNING_APPROVAL_CLOCK_TOLERANCE_MS = 5 * 60 * 1000;
+
+type PlanningInput = Awaited<ReturnType<typeof currentPlanningInput>>;
+interface PlanningServerDependencies {
+  now: () => Date;
+  loadCurrentInput: (client: SupabaseClient<Database>, userId: string, now: Date) => Promise<PlanningInput>;
+}
+const defaultDependencies: PlanningServerDependencies = { now: () => new Date(), loadCurrentInput: currentPlanningInput };
 
 export async function authenticatedPlanningClient(): Promise<{ client: SupabaseClient<Database>; user: User }> {
   const client = await createClient();
@@ -54,8 +63,10 @@ function resultSummary(result: PlanningResult): Json {
   return { unscheduledTasks: result.unscheduledTasks as unknown as Json, unscheduledRoutines: result.unscheduledRoutines as unknown as Json };
 }
 
-export async function createPlanningSession(client: SupabaseClient<Database>, userId: string, now = new Date()): Promise<PlanningSessionDetail> {
-  const input = await currentPlanningInput(client, userId, now);
+export async function createPlanningSession(client: SupabaseClient<Database>, userId: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
+  const deps = { ...defaultDependencies, ...dependencies };
+  const now = deps.now();
+  const input = await deps.loadCurrentInput(client, userId, now);
   const { data: session, error } = await client.from('planning_sessions').insert({ user_id: userId, status: 'draft', window_start: input.result.window.start, window_end: input.result.window.end, input_now: now.toISOString(), input_hash: input.hash, engine_version: PLANNING_ENGINE_VERSION, warning_codes: input.warningCodes, result_summary: resultSummary(input.result) }).select('*').eq('user_id', userId).single();
   if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を保存できませんでした。', 500);
   const values = input.result.proposedBlocks.map((block) => blockInsert(session.id, userId, block));
@@ -113,14 +124,36 @@ export function validateStoredPlan(blocks: ProposedTimeBlock[], current: Plannin
   return JSON.stringify(normalizedBlocks(blocks)) === JSON.stringify(normalizedBlocks(current.proposedBlocks));
 }
 
-export async function approvePlanningSession(client: SupabaseClient<Database>, userId: string, id: string): Promise<PlanningSessionDetail> {
+export type PlanningFreshnessReason = 'SESSION_EXPIRED' | 'WINDOW_EXPIRED' | 'BLOCK_ALREADY_STARTED' | 'BLOCK_ALREADY_ENDED';
+
+export function planningFreshnessReason(session: Pick<PlanningSessionRow, 'created_at' | 'window_end'>, blocks: readonly ProposedTimeBlock[], approvalNow: Date): PlanningFreshnessReason | null {
+  const now = approvalNow.getTime();
+  const created = new Date(session.created_at).getTime();
+  const windowEnd = new Date(session.window_end).getTime();
+  if (!Number.isFinite(now) || !Number.isFinite(created) || now - created >= PLANNING_SESSION_MAX_AGE_MS) return 'SESSION_EXPIRED';
+  if (!Number.isFinite(windowEnd) || now >= windowEnd) return 'WINDOW_EXPIRED';
+  for (const block of blocks) {
+    const start = new Date(block.start).getTime();
+    const end = new Date(block.end).getTime();
+    if (!Number.isFinite(end) || end <= now) return 'BLOCK_ALREADY_ENDED';
+    if (!Number.isFinite(start) || start < now - PLANNING_APPROVAL_CLOCK_TOLERANCE_MS) return 'BLOCK_ALREADY_STARTED';
+  }
+  return null;
+}
+
+const staleTimeError = () => new PlanningApiError('PLAN_STALE', '計画案の一部がすでに過去になっています。最新の計画案を作成してください。', 409);
+
+export async function approvePlanningSession(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
+  const deps = { ...defaultDependencies, ...dependencies };
   const saved = await getPlanningSession(client, userId, id);
   if (saved.status !== 'draft') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案だけを承認できます。', 409);
   const { data: row } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
   if (!row) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
-  const current = await currentPlanningInput(client, userId, new Date(row.input_now));
+  const current = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
   if (!validateStoredPlan(saved.blocks, current.result, current.store)) throw new PlanningApiError('PLAN_INVALID', '計画案を再検証できませんでした。', 422);
+  if (planningFreshnessReason(row, current.result.proposedBlocks, deps.now())) throw staleTimeError();
+  // approvedは確認状態にすぎない。将来のCalendar書き込みは直前の完全再検証と別の冪等APIを必須とする。
   const { data, error } = await client.rpc('approve_planning_session', { p_session_id: id, p_input_hash: row.input_hash });
   if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を承認できませんでした。', 500);
   if (data !== 'APPROVED') throw new PlanningApiError('PLAN_NOT_DRAFT', '計画案の状態が変更されています。', 409);

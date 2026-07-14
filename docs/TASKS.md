@@ -58,6 +58,7 @@
 - [x] 提案プレビュー
 - [x] Planning Session保存・stale検出・明示承認/却下
 - [x] AI-ready助言interface（外部providerなし）
+- [ ] Planning Session生成のidempotency（同一hash draft再利用・重複request排除）
 - [ ] 手動編集
 - [ ] 再生成
 
@@ -66,6 +67,8 @@
 - [ ] 承認画面
 - [ ] Googleイベント作成
 - [ ] 冪等性
+- [ ] approved Session/blockのDB不変化と書き込み直前の完全再検証
+- [ ] duration_minutesとstart/endのDB整合制約を別Migrationで検討
 - [ ] 失敗時ロールバック方針
 - [ ] audit_logs
 - [ ] 作成済み予定の更新・削除
