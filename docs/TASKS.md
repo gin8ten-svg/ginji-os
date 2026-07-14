@@ -31,6 +31,15 @@
 - [x] ユーザー設定
 - [ ] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する
 
+## Practical MVP — Daily use
+
+- [x] Todayダッシュボードとクイック追加
+- [x] タスク検索・絞り込み・並び替え
+- [x] ルーティン管理と当日完了
+- [x] 月間カレンダー
+- [x] 週次振り返り
+- [x] ローディング・エラー・保存フィードバック
+
 ## Milestone 3 — Calendar read
 
 - [ ] Google OAuthスコープ設計
@@ -70,4 +79,4 @@
 
 ## Current task
 
-Milestone 2のSupabase基盤まで。Google OAuth ProviderのClient ID / Secret設定は手動で行う。
+1ユーザー向け実用MVPまで。次はGoogle Calendar読み取りとAI計画提案。

@@ -8,13 +8,15 @@ import { ModalShell } from '@/components/modal-shell';
 
 interface TaskFormModalProps {
   task?: Task;
+  initialDueAt?: string;
+  isSubmitting?: boolean;
   onSave(task: Task): void;
   onClose(): void;
 }
-export function TaskFormModal({ task, onSave, onClose }: TaskFormModalProps) {
+export function TaskFormModal({ task, initialDueAt = '', isSubmitting = false, onSave, onClose }: TaskFormModalProps) {
   const [title, setTitle] = useState(task?.title ?? '');
   const [description, setDescription] = useState(task?.description ?? '');
-  const [dueAt, setDueAt] = useState(isoToTokyoLocalInput(task?.dueAt ?? null));
+  const [dueAt, setDueAt] = useState(isoToTokyoLocalInput(task?.dueAt ?? (initialDueAt || null)));
   const [priority, setPriority] = useState<Priority>(task?.priority ?? 3);
   const [estimatedMinutes, setEstimatedMinutes] = useState(task?.estimatedMinutes ?? 30);
   const [category, setCategory] = useState(task?.category ?? '未分類');
@@ -67,7 +69,7 @@ export function TaskFormModal({ task, onSave, onClose }: TaskFormModalProps) {
           </div>
           <label className="block text-sm font-medium">カテゴリー<input value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5" /></label>
           {validationError ? <p role="alert" className="text-sm font-medium text-rose-700">{validationError}</p> : null}
-          <button type="submit" className="min-h-12 w-full rounded-xl bg-brand-600 px-4 font-semibold text-white hover:bg-brand-500">{task ? '変更を保存' : 'タスクを作成'}</button>
+          <button type="submit" disabled={isSubmitting} className="min-h-12 w-full rounded-xl bg-brand-600 px-4 font-semibold text-white hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-50">{isSubmitting ? '保存中…' : task ? '変更を保存' : 'タスクを作成'}</button>
         </form>
     </ModalShell>
   );

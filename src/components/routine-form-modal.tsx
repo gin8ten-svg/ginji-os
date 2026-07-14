@@ -11,10 +11,11 @@ const weekdayOptions: { value: Weekday; label: string }[] = [
 
 interface RoutineFormModalProps {
   routine?: Routine;
+  isSubmitting?: boolean;
   onSave(routine: Routine): void;
   onClose(): void;
 }
-export function RoutineFormModal({ routine, onSave, onClose }: RoutineFormModalProps) {
+export function RoutineFormModal({ routine, isSubmitting = false, onSave, onClose }: RoutineFormModalProps) {
   const [name, setName] = useState(routine?.name ?? '');
   const [description, setDescription] = useState(routine?.description ?? '');
   const [frequencyType, setFrequencyType] = useState<'daily' | 'weekdays'>(routine?.frequency.type ?? 'daily');
@@ -64,7 +65,7 @@ export function RoutineFormModal({ routine, onSave, onClose }: RoutineFormModalP
           <label className="block text-sm font-medium">カテゴリー<input value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5" /></label>
           <fieldset><legend className="text-sm font-medium">実行可能な時間帯（任意・Asia/Tokyo）</legend><div className="mt-1 grid grid-cols-2 gap-3"><label className="text-xs text-slate-600">開始<input type="time" value={availableStartTime} onChange={(event) => setAvailableStartTime(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5" /></label><label className="text-xs text-slate-600">終了<input type="time" value={availableEndTime} onChange={(event) => setAvailableEndTime(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5" /></label></div></fieldset>
           {validationError ? <p role="alert" className="text-sm font-medium text-rose-700">{validationError}</p> : null}
-          <button type="submit" className="min-h-12 w-full rounded-xl bg-violet-600 px-4 font-semibold text-white hover:bg-violet-500">{routine ? '変更を保存' : 'ルーティンを作成'}</button>
+          <button type="submit" disabled={isSubmitting} className="min-h-12 w-full rounded-xl bg-violet-600 px-4 font-semibold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">{isSubmitting ? '保存中…' : routine ? '変更を保存' : 'ルーティンを作成'}</button>
         </form>
     </ModalShell>
   );
