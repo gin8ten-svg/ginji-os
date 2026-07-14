@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { isoToTokyoLocalInput, tokyoLocalInputToIso } from '@/lib/date-time';
 import { createId } from '@/lib/task-repository';
 import type { Priority, Task } from '@/types/tasks';
+import { ModalShell } from '@/components/modal-shell';
 
 interface TaskFormModalProps {
   task?: Task;
@@ -51,8 +52,7 @@ export function TaskFormModal({ task, onSave, onClose }: TaskFormModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-0 sm:items-center sm:p-4" role="presentation">
-      <section role="dialog" aria-modal="true" aria-labelledby="task-form-title" className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-xl sm:max-w-lg sm:rounded-3xl">
+    <ModalShell labelledBy="task-form-title" onClose={onClose}>
         <div className="flex items-center justify-between">
           <h2 id="task-form-title" className="text-xl font-semibold">{task ? 'タスクを編集' : '新しいタスク'}</h2>
           <button type="button" onClick={onClose} className="min-h-11 rounded-full px-4 text-sm font-medium text-slate-600 hover:bg-slate-100">閉じる</button>
@@ -69,7 +69,6 @@ export function TaskFormModal({ task, onSave, onClose }: TaskFormModalProps) {
           {validationError ? <p role="alert" className="text-sm font-medium text-rose-700">{validationError}</p> : null}
           <button type="submit" className="min-h-12 w-full rounded-xl bg-brand-600 px-4 font-semibold text-white hover:bg-brand-500">{task ? '変更を保存' : 'タスクを作成'}</button>
         </form>
-      </section>
-    </div>
+    </ModalShell>
   );
 }

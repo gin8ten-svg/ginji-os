@@ -8,7 +8,7 @@ import { classifyTask, isRoutineScheduled, tokyoDateKey } from '@/lib/date-time'
 import { timeline } from '@/lib/mock-data';
 
 export default function TodayPage() {
-  const { store, isLoading, error, toggleRoutineCompletion } = useTaskData();
+  const { store, isLoading, error, recoveryNotice, toggleRoutineCompletion } = useTaskData();
   const today = tokyoDateKey();
   const todayTasks = store?.tasks.filter((task) => classifyTask(task, today) === 'today') ?? [];
   const routines = store?.routines.filter((routine) => isRoutineScheduled(routine, today)) ?? [];
@@ -27,10 +27,11 @@ export default function TodayPage() {
       </section>
 
       {error ? <ErrorState title="保存データを利用できません" description={error} /> : null}
+      {recoveryNotice ? <p role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800">{recoveryNotice}</p> : null}
       {isLoading ? <LoadingState /> : null}
 
       <div className="grid gap-3 md:grid-cols-3">
-        <StatusCard title="次の予定" value="10:00 / AI作業枠" subtitle="営業資料の修正" />
+        <StatusCard title="サンプル予定" value="10:00 / AI作業枠" subtitle="AI Planner実装後に実データを反映" />
         <StatusCard title="今日の進捗" value={`${progress}%`} subtitle={`${completedCount} / ${totalItems} 完了`} tone="success" />
         <StatusCard title="再計画" value="今から組み直す" subtitle="空き時間を見直す" tone="warning" />
       </div>
@@ -44,7 +45,7 @@ export default function TodayPage() {
       </section> : null}
 
       <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between"><h3 className="text-lg font-semibold">今日のタイムライン</h3><button type="button" className="min-h-10 rounded-full bg-brand-50 px-3 text-sm font-medium text-brand-700">今日を組む</button></div>
+        <div className="flex items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">今日のタイムライン</h3><p className="mt-1 text-xs text-slate-500">サンプル表示・AI Planner実装後に反映</p></div><button type="button" className="min-h-10 rounded-full bg-brand-50 px-3 text-sm font-medium text-brand-700">今日を組む</button></div>
         <div className="mt-4 space-y-3">{timeline.map((item) => <div key={item.time} className="flex items-start gap-3 rounded-2xl bg-slate-50 p-3"><div className={`mt-1 h-3 w-3 rounded-full ${item.type === 'ai' ? 'bg-brand-500' : 'bg-slate-400'}`} /><div className="flex-1"><div className="flex items-center justify-between gap-2"><p className="font-medium">{item.title}</p><span className="text-sm text-slate-500">{item.time}</span></div>{item.note ? <p className="mt-1 text-sm text-slate-600">{item.note}</p> : null}</div></div>)}</div>
       </section>
     </div>
