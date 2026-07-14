@@ -36,6 +36,11 @@ Route Handlerに限定し、Access Tokenは永続化しない。Refresh Tokenは
 OpenAI API。
 モデルには自由形式の予定を書かせず、定義済みスキーマに従う計画案を返させる。
 
+AI導入前のPlanning Engineは、正規化済みGoogle予定、Task、Routineだけを入力にする純粋な決定論的層とする。
+Google Tokenやuser_idは入力に含めない。Asia/Tokyoの08:00〜22:00を7日分生成し、固定予定を差し引いた
+空き枠へTaskとRoutineをeffective deadlineで横断的に配置する。結果は確認専用で、外部Calendarへの
+書き込みは行わない。
+
 ## 2. Data flow
 
 1. ユーザーがGoogleでログイン
