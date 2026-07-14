@@ -105,7 +105,18 @@ function taskDeadline(task: Task, window: PlanningWindow, now: Date): number {
   return Math.min(due, instant(date, window.workdayEnd), new Date(window.end).getTime());
 }
 
-function planningCandidates(window: PlanningWindow, tasks: readonly Task[], routines: readonly Routine[], completions: readonly RoutineCompletion[], now: Date): PlanningCandidate[] {
+export function planningPriorityBand(candidate: { kind: 'task'; dueAt: string | null } | { kind: 'routine'; constrained: boolean }, now: Date): number {
+  if (candidate.kind === 'routine') return candidate.constrained ? 4 : 6;
+  if (!candidate.dueAt) return 8;
+  const due = new Date(candidate.dueAt).getTime();
+  const today = tokyoDateKey(now); const dueDate = tokyoDateKey(new Date(due));
+  if (due < now.getTime()) return 1;
+  if (dueDate === today) return 2;
+  if (dueDate === shiftTokyoDate(today, 1)) return 3;
+  return due <= instant(shiftTokyoDate(today, 7), DAY_END) ? 5 : 7;
+}
+
+function planningCandidates(window: PlanningWindow, tasks: readonly Task[], routines: readonly Routine[], completions: readonly RoutineCompletion[], now: Date, orderingOverride?: readonly string[]): PlanningCandidate[] {
   const completed = new Set(completions.map((item) => `${item.date}:${item.routineId}`));
   const candidates: PlanningCandidate[] = [];
   for (const task of tasks) {
@@ -116,7 +127,12 @@ function planningCandidates(window: PlanningWindow, tasks: readonly Task[], rout
     if (!isRoutineScheduled(routine, date) || completed.has(`${date}:${routine.id}`)) continue;
     candidates.push({ kind: 'routine', routine, date, effectiveDeadline: instant(date, routine.availableEndTime ?? window.workdayEnd), priority: routine.priority, createdAt: routine.createdAt, id: `${routine.id}:${date}` });
   }
-  return candidates.sort((a, b) => a.effectiveDeadline - b.effectiveDeadline || b.priority - a.priority || (a.kind === b.kind ? 0 : a.kind === 'task' ? -1 : 1) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const baseline = (a: PlanningCandidate, b: PlanningCandidate) => a.effectiveDeadline - b.effectiveDeadline || b.priority - a.priority || (a.kind === b.kind ? 0 : a.kind === 'task' ? -1 : 1) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+  if (!orderingOverride?.length) return candidates.sort(baseline);
+  const ranks = new Map(orderingOverride.map((id, index) => [id, index]));
+  const sourceKey = (item: PlanningCandidate) => item.kind === 'task' ? `task:${item.task.id}` : `routine:${item.routine.id}`;
+  const band = (item: PlanningCandidate) => item.kind === 'task' ? planningPriorityBand({ kind: 'task', dueAt: item.task.dueAt }, now) : planningPriorityBand({ kind: 'routine', constrained: Boolean(item.routine.availableStartTime && item.routine.availableEndTime) }, now);
+  return candidates.sort((a, b) => band(a) - band(b) || (ranks.get(sourceKey(a)) ?? Number.MAX_SAFE_INTEGER) - (ranks.get(sourceKey(b)) ?? Number.MAX_SAFE_INTEGER) || b.priority - a.priority || baseline(a, b));
 }
 
 function routineFailureReason(candidate: Extract<PlanningCandidate, { kind: 'routine' }>, window: PlanningWindow, googleBusy: readonly BusyInterval[]): UnscheduledRoutine['reason'] {
@@ -130,14 +146,14 @@ function routineFailureReason(candidate: Extract<PlanningCandidate, { kind: 'rou
   return '指定時間帯に空きがない';
 }
 
-export function buildPlanningResult(input: { now: Date; events: readonly ExternalCalendarEvent[]; tasks: readonly Task[]; routines: readonly Routine[]; completions: readonly RoutineCompletion[] }): PlanningResult {
+export function buildPlanningResult(input: { now: Date; events: readonly ExternalCalendarEvent[]; tasks: readonly Task[]; routines: readonly Routine[]; completions: readonly RoutineCompletion[]; orderingOverride?: readonly string[] }): PlanningResult {
   const window = createPlanningWindow(input.now);
   const googleBusy = mergeBusyIntervals(googleEventsToBusyIntervals(input.events, window));
   const slots = calculateFreeSlots(window, googleBusy).map((item) => ({ ...item }));
   const proposedBlocks: ProposedTimeBlock[] = [];
   const unscheduledTasks: UnscheduledTask[] = [];
   const unscheduledRoutines: UnscheduledRoutine[] = [];
-  for (const candidate of planningCandidates(window, input.tasks, input.routines, input.completions, input.now)) {
+  for (const candidate of planningCandidates(window, input.tasks, input.routines, input.completions, input.now, input.orderingOverride)) {
     if (candidate.kind === 'routine') {
       const allowedStart = instant(candidate.date, candidate.routine.availableStartTime ?? window.workdayStart);
       const allowedEnd = instant(candidate.date, candidate.routine.availableEndTime ?? window.workdayEnd);
