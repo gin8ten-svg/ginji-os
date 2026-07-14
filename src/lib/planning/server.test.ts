@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
-import { approvePlanningSession, createPlanningSession, getPlanningSession, planningFreshnessReason, rejectPlanningSession } from '@/lib/planning/server';
+import { approvePlanningSession, createAdvisedPlanningSession, createPlanningSession, getPlanningSession, planningFreshnessReason, rejectPlanningSession } from '@/lib/planning/server';
 import type { Database, PlanningBlockRow, PlanningSessionRow } from '@/types/database';
 import type { PlanningResult, ProposedTimeBlock } from '@/types/planning';
 import type { TaskStore } from '@/types/tasks';
@@ -20,6 +20,7 @@ class StubQuery implements PromiseLike<QueryResult> {
   delete() { return this.record('delete'); }
   eq(column: string, value: unknown) { this.filters.push([column, value]); return this; }
   order() { return this; }
+  limit() { return this; }
   single() { return Promise.resolve(this.owner.result(this.table, this.operation)); }
   maybeSingle() { return Promise.resolve(this.owner.result(this.table, this.operation)); }
   then<TResult1 = QueryResult, TResult2 = never>(onfulfilled?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null, onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null) { return Promise.resolve(this.owner.result(this.table, this.operation)).then(onfulfilled, onrejected); }
@@ -45,7 +46,7 @@ const sessionRow = (status: PlanningSessionRow['status'] = 'draft'): PlanningSes
 const blockRow: PlanningBlockRow = { id: '44444444-4444-4444-8444-444444444444', planning_session_id: sessionId, user_id: userId, source_type: 'task', source_entity_id: block.taskId!, title: block.title, start_at: block.start, end_at: block.end, block_index: 1, duration_minutes: 60, metadata: {}, created_at: createdAt };
 const store: TaskStore = { version: 1, tasks: [{ id: block.taskId!, title: 'Task', description: '', dueAt: null, priority: 3, estimatedMinutes: 60, remainingMinutes: 60, splittable: false, minimumBlockMinutes: 25, category: '', completedAt: null, createdAt, updatedAt: createdAt, source: 'user' }], routines: [], routineCompletions: [] };
 const result: PlanningResult = { window: { start: sessionRow().window_start, end: sessionRow().window_end, timeZone: 'Asia/Tokyo', workdayStart: '08:00', workdayEnd: '22:00', minimumSlotMinutes: 25, dates: ['2026-07-15'] }, busyIntervals: [], freeSlots: [], proposedBlocks: [block], unscheduledTasks: [], unscheduledRoutines: [], warnings: [] };
-const dependencies = (now = new Date('2026-07-15T01:00:00.000Z'), inputHash = hash, planningResult = result) => ({ now: () => now, loadCurrentInput: async () => ({ store, result: planningResult, warningCodes: [], hash: inputHash }) });
+const dependencies = (now = new Date('2026-07-15T01:00:00.000Z'), inputHash = hash, planningResult = result) => ({ now: () => now, loadCurrentInput: async () => ({ store, events: [], result: planningResult, warningCodes: [], hash: inputHash }) });
 const queueGet = (fake: FakeSupabase, session: PlanningSessionRow | null, blocks: PlanningBlockRow[] = [blockRow]) => { fake.queue('planning_sessions', 'select', { data: session, error: null }); fake.queue('planning_blocks', 'select', { data: blocks, error: null }); };
 
 describe('planning session freshness', () => {
@@ -107,5 +108,18 @@ describe('planning server runtime workflows', () => {
   it('他ユーザーsessionは承認・却下ともPLAN_NOT_FOUND', async () => {
     const approveFake = new FakeSupabase(); queueGet(approveFake, null, []); await expect(approvePlanningSession(approveFake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' });
     const rejectFake = new FakeSupabase(); queueGet(rejectFake, null, []); await expect(rejectPlanningSession(rejectFake.client(), userId, sessionId)).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' });
+  });
+  it('AI adviceは元sessionを更新せず新しいdraftへ安全なmetadataとblocksを保存する', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queue('planning_sessions', 'select', { data: [], error: null });
+    const advice = { advisorVersion: 'openai-advice-v1', model: 'test-model', globalSummary: 'safe', warnings: [], orderedSources: [{ alias: 'task_1', sourceType: 'task' as const, sourceId: block.taskId!, explanation: 'safe reason', changed: false }] };
+    fake.queue('planning_sessions', 'insert', { data: { ...sessionRow(), id: '55555555-5555-4555-8555-555555555555', engine_version: 'deterministic-v1+openai-advice-v1', warning_codes: ['AI_ADVICE_APPLIED'], result_summary: { unscheduledTasks: [], unscheduledRoutines: [], advice } }, error: null }); fake.queue('planning_blocks', 'insert', { data: null, error: null });
+    const detail = await createAdvisedPlanningSession(fake.client(), userId, sessionId, { ...dependencies(), advisor: () => ({ model: 'test-model', advise: async (input) => ({ orderedSourceIds: input.deterministicOrdering, explanationBySourceId: { task_1: 'safe reason' }, globalSummary: 'safe', warnings: [] }) }) });
+    expect(detail.status).toBe('draft'); expect(detail.advice?.model).toBe('test-model');
+    const insert = fake.calls.find((item) => item.table === 'planning_sessions' && item.operation === 'insert'); expect(insert?.payload).toMatchObject({ status: 'draft', user_id: userId, engine_version: 'deterministic-v1+openai-advice-v1' });
+    expect(fake.calls.some((item) => item.operation === 'delete')).toBe(false); expect(fake.calls.some((item) => item.operation === ('update' as Operation))).toBe(false);
+  });
+  it('直近30秒のAI draftはprovider呼び出し前にrate limitする', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queue('planning_sessions', 'select', { data: [{ ...sessionRow(), engine_version: 'deterministic-v1+openai-advice-v1', created_at: '2026-07-15T00:59:45Z' }], error: null }); let calls = 0;
+    await expect(createAdvisedPlanningSession(fake.client(), userId, sessionId, { ...dependencies(), advisor: () => ({ advise: async () => { calls += 1; return { orderedSourceIds: [], explanationBySourceId: {}, globalSummary: '', warnings: [] }; } }) })).rejects.toMatchObject({ code: 'AI_RATE_LIMITED' }); expect(calls).toBe(0);
   });
 });
