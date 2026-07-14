@@ -54,8 +54,10 @@
 - [x] 制約エンジン
 - [ ] 優先順位スコア
 - [ ] OpenAI構造化出力
-- [ ] サーバー検証
+- [x] サーバー検証
 - [x] 提案プレビュー
+- [x] Planning Session保存・stale検出・明示承認/却下
+- [x] AI-ready助言interface（外部providerなし）
 - [ ] 手動編集
 - [ ] 再生成
 
@@ -79,4 +81,4 @@
 
 ## Current task
 
-1ユーザー向け実用MVPまで。次はGoogle Calendar読み取りとAI計画提案。
+Planning Session承認基盤まで。次は監査後に、承認済みSessionだけを入力にするCalendar書き込み設計。
