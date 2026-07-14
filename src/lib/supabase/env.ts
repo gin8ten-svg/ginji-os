@@ -3,13 +3,21 @@ export interface SupabasePublicEnv {
   publishableKey: string;
 }
 
-export function getSupabasePublicEnv(
-  env: Record<string, string | undefined> = process.env,
+export function parseSupabasePublicEnv(
+  urlValue: string | undefined,
+  publishableKeyValue: string | undefined,
 ): SupabasePublicEnv | null {
-  const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const publishableKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+  const url = urlValue?.trim();
+  const publishableKey = publishableKeyValue?.trim();
   if (!url || !publishableKey) return null;
   return { url, publishableKey };
+}
+
+export function getSupabasePublicEnv(): SupabasePublicEnv | null {
+  return parseSupabasePublicEnv(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+  );
 }
 
 export function requireSupabasePublicEnv(): SupabasePublicEnv {
