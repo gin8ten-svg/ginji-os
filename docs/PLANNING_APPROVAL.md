@@ -34,8 +34,12 @@ Sessionは `PLAN_STALE` として承認しない。
 
 ## AI and Calendar boundary
 
-現在は外部AI providerもGoogle Calendar書き込みAPIも存在しない。`PlanningAdvisor` は最小化したID、順序、
+外部AI providerは任意のAdvice生成だけに限定し、Google Calendar書き込みAPIは存在しない。`PlanningAdvisor` は最小化したID、順序、
 集計だけを扱い、未知IDを破棄できる。AI助言だけで承認することはできず、決定論的Engineが最終検証者である。
+
+OpenAI Adviceを利用する場合も、元のdeterministic draftは変更せず新しいdraftを作る。承認時にAIを再度
+呼び出さず、保存済みのsanitize済み順序を現在所有するentityだけへ絞り、hard priority bandとEngineで
+再配置して保存blocksと比較する。AI responseや説明だけでapprovedへ遷移しない。
 
 `planning_sessions.status = approved` だけでは、将来のGoogle Calendar書き込み許可として十分ではない。
 書き込みAPIは書き込み直前に、認証ユーザー、Session所有権、approved状態、現在入力、input_hash、実時刻鮮度、
