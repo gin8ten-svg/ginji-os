@@ -42,12 +42,12 @@
 
 ## Milestone 3 — Calendar read
 
-- [ ] Google OAuthスコープ設計
-- [ ] 接続状態画面
-- [ ] 対象日の予定取得
-- [ ] 終日予定処理
-- [ ] 空き時間計算
-- [ ] タイムゾーンテスト
+- [x] Google OAuthスコープ設計
+- [x] 接続状態画面
+- [x] 対象日の予定取得
+- [x] 終日予定処理
+- [ ] 空き時間計算（Planner制約エンジンで実装）
+- [x] タイムゾーンテスト
 
 ## Milestone 4 — Planner proposal
 
