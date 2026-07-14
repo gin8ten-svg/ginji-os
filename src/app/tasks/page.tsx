@@ -10,6 +10,7 @@ import { TaskFormModal } from '@/components/task-form-modal';
 import { useTaskData } from '@/components/task-data-provider';
 import { formatDueAt, tokyoDateKey } from '@/lib/date-time';
 import { filterAndSortTasks, isOverdueTask, type TaskSort } from '@/lib/practical-mvp';
+import { toggleTaskCompletion } from '@/lib/task-planning';
 import type { Priority, Routine, Task, TaskCategory } from '@/types/tasks';
 
 const statusOptions: Array<{ value: TaskCategory | 'all'; label: string }> = [
@@ -33,9 +34,9 @@ export default function TasksPage() {
   const visibleTasks = useMemo(() => filterAndSortTasks(store?.tasks ?? [], { status, priority, category, query, sort, today }), [category, priority, query, sort, status, store?.tasks, today]);
   const completedRoutineIds = new Set(store?.routineCompletions.filter((completion) => completion.date === today).map((completion) => completion.routineId) ?? []);
 
-  const toggleTask = (task: Task) => saveTask({ ...task, completedAt: task.completedAt ? null : new Date().toISOString(), updatedAt: new Date().toISOString() });
-  const confirmDeleteTask = (task: Task) => { if (window.confirm(`「${task.title}」を削除しますか？`)) deleteTask(task.id); };
-  const confirmDeleteRoutine = (routine: Routine) => { if (window.confirm(`ルーティン「${routine.name}」と実行履歴を削除しますか？`)) deleteRoutine(routine.id); };
+  const toggleTask = (task: Task) => { void saveTask(toggleTaskCompletion(task)).catch(() => undefined); };
+  const confirmDeleteTask = (task: Task) => { if (window.confirm(`「${task.title}」を削除しますか？`)) void deleteTask(task.id).catch(() => undefined); };
+  const confirmDeleteRoutine = (routine: Routine) => { if (window.confirm(`ルーティン「${routine.name}」と実行履歴を削除しますか？`)) void deleteRoutine(routine.id).catch(() => undefined); };
 
   return <div className="space-y-4">
     <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -63,11 +64,12 @@ export default function TasksPage() {
 
     {!isLoading && store && mode === 'routines' ? <div className="space-y-3">{store.routines.length === 0 ? <EmptyState title="ルーティンはまだありません" description="毎日または曜日指定の繰り返し作業を追加できます。" /> : store.routines.map((routine) => { const completed = completedRoutineIds.has(routine.id); return <article key={routine.id} className={`rounded-2xl border p-4 shadow-sm ${routine.isActive ? 'border-violet-200 bg-white' : 'border-slate-200 bg-slate-100'}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="break-words font-semibold">{routine.name}</h3>{routine.description ? <p className="mt-1 break-words text-sm text-slate-600">{routine.description}</p> : null}</div><span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${routine.isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>{routine.isActive ? '有効' : '無効'}</span></div><div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600"><span>{routine.frequency.type === 'daily' ? '毎日' : routine.frequency.weekdays.map((day) => weekdayLabels[day]).join('・')}</span><span>{routine.estimatedMinutes}分</span><span>優先度 {routine.priority}</span><span>{routine.category}</span></div><div className="mt-4 flex flex-wrap gap-2"><Action disabled={isSaving || !routine.isActive} onClick={() => toggleRoutineCompletion(routine.id, today)}>{completed ? '今日を未完了に戻す' : '今日完了'}</Action><Action disabled={isSaving} onClick={() => saveRoutine({ ...routine, isActive: !routine.isActive, updatedAt: new Date().toISOString() })}>{routine.isActive ? '無効にする' : '有効にする'}</Action><Action disabled={isSaving} onClick={() => setRoutineForm(routine)}>編集</Action><Action disabled={isSaving} danger onClick={() => confirmDeleteRoutine(routine)}>削除</Action></div></article>; })}</div> : null}
 
-    {taskForm ? <TaskFormModal task={taskForm === 'new' ? undefined : taskForm} isSubmitting={isSaving} onClose={() => setTaskForm(null)} onSave={(task) => { saveTask(task); setTaskForm(null); }} /> : null}
-    {routineForm ? <RoutineFormModal routine={routineForm === 'new' ? undefined : routineForm} isSubmitting={isSaving} onClose={() => setRoutineForm(null)} onSave={(routine) => { saveRoutine(routine); setRoutineForm(null); }} /> : null}
+    {taskForm ? <TaskFormModal task={taskForm === 'new' ? undefined : taskForm} isSubmitting={isSaving} onClose={() => setTaskForm(null)} onSave={saveTask} /> : null}
+    {routineForm ? <RoutineFormModal routine={routineForm === 'new' ? undefined : routineForm} isSubmitting={isSaving} onClose={() => setRoutineForm(null)} onSave={saveRoutine} /> : null}
   </div>;
 }
 
-function Action({ children, disabled, danger = false, onClick }: { children: React.ReactNode; disabled: boolean; danger?: boolean; onClick: () => void }) {
-  return <button type="button" disabled={disabled} onClick={onClick} className={`min-h-10 rounded-full px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${danger ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-700'}`}>{children}</button>;
+function Action({ children, disabled, danger = false, onClick }: { children: React.ReactNode; disabled: boolean; danger?: boolean; onClick: () => void | Promise<void> }) {
+  const handleClick = () => { void Promise.resolve(onClick()).catch(() => undefined); };
+  return <button type="button" disabled={disabled} onClick={handleClick} className={`min-h-10 rounded-full px-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${danger ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-700'}`}>{children}</button>;
 }

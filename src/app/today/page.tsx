@@ -9,22 +9,24 @@ import { TaskFormModal } from '@/components/task-form-modal';
 import { useTaskData } from '@/components/task-data-provider';
 import { formatDueAt, isRoutineScheduled, tokyoDateKey } from '@/lib/date-time';
 import { isOverdueTask, todayDashboardTasks } from '@/lib/practical-mvp';
+import { toggleTaskCompletion } from '@/lib/task-planning';
+import { useTokyoDateKey } from '@/lib/use-tokyo-date';
 import type { Task } from '@/types/tasks';
 
 export default function TodayPage() {
   const { store, isLoading, isSaving, error, successMessage, recoveryNotice, retry, saveTask, toggleRoutineCompletion } = useTaskData();
   const [quickAdd, setQuickAdd] = useState(false);
-  const today = tokyoDateKey();
-  const tasks = useMemo(() => todayDashboardTasks(store?.tasks ?? [], today), [store?.tasks, today]);
-  const routines = useMemo(() => store?.routines.filter((routine) => isRoutineScheduled(routine, today)) ?? [], [store?.routines, today]);
+  const today = useTokyoDateKey();
+  const tasks = useMemo(() => today ? todayDashboardTasks(store?.tasks ?? [], today) : [], [store?.tasks, today]);
+  const routines = useMemo(() => today ? store?.routines.filter((routine) => isRoutineScheduled(routine, today)) ?? [] : [], [store?.routines, today]);
   const completedRoutineIds = new Set(store?.routineCompletions.filter((completion) => completion.date === today).map((completion) => completion.routineId) ?? []);
-  const todayCompletedTasks = store?.tasks.filter((task) => task.completedAt && tokyoDateKey(new Date(task.completedAt)) === today).length ?? 0;
+  const todayCompletedTasks = today ? store?.tasks.filter((task) => task.completedAt && tokyoDateKey(new Date(task.completedAt)) === today).length ?? 0 : 0;
   const completedRoutines = routines.filter((routine) => completedRoutineIds.has(routine.id)).length;
-  const remainingMinutes = tasks.reduce((sum, task) => sum + task.estimatedMinutes, 0)
+  const remainingMinutes = tasks.reduce((sum, task) => sum + task.remainingMinutes, 0)
     + routines.filter((routine) => !completedRoutineIds.has(routine.id)).reduce((sum, routine) => sum + routine.estimatedMinutes, 0);
-  const dateLabel = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
+  const dateLabel = today ? new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date(`${today}T12:00:00+09:00`)) : '日付を確認中';
 
-  const toggleTask = (task: Task) => saveTask({ ...task, completedAt: task.completedAt ? null : new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const toggleTask = (task: Task) => { void saveTask(toggleTaskCompletion(task)).catch(() => undefined); };
 
   return <div className="space-y-4">
     <section className="rounded-3xl bg-gradient-to-br from-brand-500 to-brand-700 p-5 text-white shadow-sm">
@@ -35,9 +37,9 @@ export default function TodayPage() {
     {error ? <ErrorState title="データを利用できません" description={error} onRetry={retry} /> : null}
     <DataFeedback message={successMessage} />
     {recoveryNotice ? <p role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800">{recoveryNotice}</p> : null}
-    {isLoading ? <LoadingState /> : null}
+    {isLoading || !today ? <LoadingState /> : null}
 
-    {!isLoading && store ? <>
+    {!isLoading && today && store ? <>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Metric label="今日の完了" value={`${todayCompletedTasks + completedRoutines}件`} />
         <Metric label="残り時間" value={`${remainingMinutes}分`} />
@@ -56,7 +58,7 @@ export default function TodayPage() {
       </section>
     </> : null}
 
-    {quickAdd ? <TaskFormModal initialDueAt={new Date(`${today}T23:59:00+09:00`).toISOString()} isSubmitting={isSaving} onClose={() => setQuickAdd(false)} onSave={(task) => { saveTask(task); setQuickAdd(false); }} /> : null}
+    {quickAdd && today ? <TaskFormModal initialDueAt={new Date(`${today}T23:59:00+09:00`).toISOString()} isSubmitting={isSaving} onClose={() => setQuickAdd(false)} onSave={saveTask} /> : null}
   </div>;
 }
 

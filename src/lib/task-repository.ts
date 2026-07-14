@@ -1,4 +1,5 @@
 import { shiftTokyoDate, tokyoDateKey } from '@/lib/date-time';
+import { taskPlanningDefaults } from '@/lib/task-planning';
 import type { DataSource, Priority, Routine, RoutineCompletion, RoutineFrequency, Task, TaskStore, Weekday } from '@/types/tasks';
 
 export const STORAGE_KEY = 'ginji-os:tasks-routines:v1';
@@ -45,6 +46,10 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
 function isDataSource(value: unknown): value is DataSource {
   return value === 'sample' || value === 'user';
 }
@@ -81,6 +86,10 @@ export function isTask(value: unknown): value is Task {
     && isNullableIsoDate(value.dueAt)
     && isPriority(value.priority)
     && isPositiveInteger(value.estimatedMinutes)
+    && isNonNegativeInteger(value.remainingMinutes)
+    && value.remainingMinutes <= value.estimatedMinutes
+    && typeof value.splittable === 'boolean'
+    && isPositiveInteger(value.minimumBlockMinutes)
     && typeof value.category === 'string'
     && isNullableIsoDate(value.completedAt)
     && isIsoDate(value.createdAt)
@@ -121,6 +130,32 @@ export function isTaskStore(value: unknown): value is TaskStore {
     && Array.isArray(value.routineCompletions) && value.routineCompletions.every(isRoutineCompletion);
 }
 
+function normalizeLegacyTask(value: unknown): Task | null {
+  if (!isRecord(value)) return null;
+  const estimatedMinutes = value.estimatedMinutes;
+  const completedAt = value.completedAt;
+  if (!isPositiveInteger(estimatedMinutes) || !isNullableIsoDate(completedAt)) return null;
+  const defaults = taskPlanningDefaults(estimatedMinutes, completedAt);
+  const normalized = {
+    ...value,
+    splittable: typeof value.splittable === 'boolean' ? value.splittable : defaults.splittable,
+    minimumBlockMinutes: isPositiveInteger(value.minimumBlockMinutes) ? value.minimumBlockMinutes : defaults.minimumBlockMinutes,
+    remainingMinutes: isNonNegativeInteger(value.remainingMinutes)
+      ? Math.min(value.remainingMinutes, estimatedMinutes)
+      : defaults.remainingMinutes,
+  };
+  return isTask(normalized) ? normalized : null;
+}
+
+export function normalizeTaskStore(value: unknown): TaskStore | null {
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.tasks)
+    || !Array.isArray(value.routines) || !Array.isArray(value.routineCompletions)) return null;
+  const tasks = value.tasks.map(normalizeLegacyTask);
+  if (tasks.some((task) => task === null) || !value.routines.every(isRoutine)
+    || !value.routineCompletions.every(isRoutineCompletion)) return null;
+  return { version: 1, tasks: tasks as Task[], routines: value.routines, routineCompletions: value.routineCompletions };
+}
+
 function dueAt(dateKey: string, time: string): string {
   return new Date(`${dateKey}T${time}:00+09:00`).toISOString();
 }
@@ -128,7 +163,7 @@ function dueAt(dateKey: string, time: string): string {
 export function createInitialStore(now = new Date()): TaskStore {
   const today = tokyoDateKey(now);
   const createdAt = now.toISOString();
-  const task = (value: Omit<Task, 'createdAt' | 'updatedAt' | 'source'>): Task => ({ ...value, createdAt, updatedAt: createdAt, source: 'sample' });
+  const task = (value: Omit<Task, 'createdAt' | 'updatedAt' | 'source' | 'remainingMinutes' | 'splittable' | 'minimumBlockMinutes'>): Task => ({ ...value, ...taskPlanningDefaults(value.estimatedMinutes, value.completedAt), createdAt, updatedAt: createdAt, source: 'sample' });
   const routine = (value: Omit<Routine, 'createdAt' | 'updatedAt' | 'source'>): Routine => ({ ...value, createdAt, updatedAt: createdAt, source: 'sample' });
   return {
     version: 1,
@@ -166,8 +201,10 @@ export class LocalTaskRepository implements TaskRepository {
     }
     try {
       const parsed: unknown = JSON.parse(saved);
-      if (!isTaskStore(parsed)) throw new Error('invalid task store');
-      return { store: parsed, recovered: false, backupKey: null };
+      const normalized = normalizeTaskStore(parsed);
+      if (!normalized) throw new Error('invalid task store');
+      if (!isTaskStore(parsed)) this.save(normalized);
+      return { store: normalized, recovered: false, backupKey: null };
     } catch {
       const backupKey = `${CORRUPT_STORAGE_PREFIX}${this.now().toISOString()}`;
       storage.setItem(backupKey, saved);

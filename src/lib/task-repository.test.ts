@@ -74,4 +74,17 @@ describe('LocalStorageTaskRepository', () => {
     expectRecovered(storage, result, original);
     expect(result.store).toEqual(createInitialStore(fixedNow));
   });
+
+  it('旧Localデータへ計画フィールドのdefaultを補完して保存する', () => {
+    const legacy = createInitialStore(fixedNow);
+    const task = legacy.tasks[0] as unknown as Record<string, unknown>;
+    delete task.splittable;
+    delete task.minimumBlockMinutes;
+    delete task.remainingMinutes;
+    const { storage, repository } = setup(JSON.stringify(legacy));
+    const result = repository.load();
+    expect(result.recovered).toBe(false);
+    expect(result.store.tasks[0]).toMatchObject({ splittable: true, minimumBlockMinutes: 25, remainingMinutes: 60 });
+    expect(JSON.parse(storage.getItem(STORAGE_KEY) as string).tasks[0]).toHaveProperty('remainingMinutes', 60);
+  });
 });

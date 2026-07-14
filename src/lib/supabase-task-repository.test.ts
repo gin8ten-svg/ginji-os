@@ -65,7 +65,7 @@ const dbTaskId = '11111111-1111-4111-8111-111111111111';
 const dbRoutineId = '22222222-2222-4222-8222-222222222222';
 
 function appTask(id = 'task-local-id'): Task {
-  return { id, title: 'Task', description: '', dueAt: null, priority: 3, estimatedMinutes: 30, category: '', completedAt: null, createdAt: timestamps.created_at, updatedAt: timestamps.updated_at, source: 'user' };
+  return { id, title: 'Task', description: '', dueAt: null, priority: 3, estimatedMinutes: 30, remainingMinutes: 30, splittable: true, minimumBlockMinutes: 25, category: '', completedAt: null, createdAt: timestamps.created_at, updatedAt: timestamps.updated_at, source: 'user' };
 }
 
 function taskRow(id = dbTaskId): TaskRow {
@@ -117,7 +117,10 @@ describe('SupabaseTaskRepository UUID handling', () => {
     await repository.updateTask(appTask(dbTaskId));
     await repository.deleteTask(dbTaskId);
     const taskWrites = fake.calls.filter((call) => call.table === 'tasks' && (call.operation === 'update' || call.operation === 'delete'));
-    expect(taskWrites.map((call) => call.filters)).toEqual([[['id', dbTaskId]], [['id', dbTaskId]]]);
+    expect(taskWrites.map((call) => call.filters)).toEqual([
+      [['id', dbTaskId], ['user_id', 'user-id']],
+      [['id', dbTaskId], ['user_id', 'user-id']],
+    ]);
   });
 
   it('categoryとroutine completionのINSERT payloadにもidを含めない', async () => {
@@ -148,5 +151,30 @@ describe('SupabaseTaskRepository UUID handling', () => {
       name: 'SupabaseRepositoryError',
       message: 'タスク作成に失敗しました: invalid input syntax for type uuid',
     } satisfies Partial<SupabaseRepositoryError>));
+  });
+
+  it('全読み取りと所有行の更新・削除をuser_idで多層防御する', async () => {
+    const fake = new FakeSupabase();
+    const repository = new SupabaseTaskRepository(fake.client(), 'user-id');
+    await repository.loadStore();
+    expect(fake.calls.filter((call) => call.table === 'categories' && call.operation === 'select')).toHaveLength(1);
+    fake.queue('routines', 'update', { data: routineRow(), error: null });
+    await repository.updateRoutine(appRoutine(dbRoutineId));
+    await repository.deleteRoutine(dbRoutineId);
+    await repository.setRoutineCompletion(dbRoutineId, '2026-07-15', false);
+    const relevant = fake.calls.filter((call) =>
+      (call.operation === 'select' || call.operation === 'update' || call.operation === 'delete')
+      && ['categories', 'tasks', 'routines', 'routine_completions'].includes(call.table));
+    relevant.forEach((call) => expect(call.filters).toContainEqual(['user_id', 'user-id']));
+  });
+
+  it('INSERT payloadのuser_idと計画フィールドをRepository値で固定する', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('tasks', 'insert', { data: taskRow(), error: null });
+    const repository = new SupabaseTaskRepository(fake.client(), 'owner-id');
+    await repository.createTask({ ...appTask(), splittable: false, minimumBlockMinutes: 10, remainingMinutes: 12 });
+    expect(fake.calls.find((call) => call.table === 'tasks' && call.operation === 'insert')?.payload).toMatchObject({
+      user_id: 'owner-id', splittable: false, minimum_block_minutes: 10, remaining_minutes: 12,
+    });
   });
 });

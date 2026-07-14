@@ -14,10 +14,11 @@ const focusableSelector = [
 interface ModalShellProps {
   labelledBy: string;
   onClose(): void;
+  closeDisabled?: boolean;
   children: React.ReactNode;
 }
 
-export function ModalShell({ labelledBy, onClose, children }: ModalShellProps) {
+export function ModalShell({ labelledBy, onClose, closeDisabled = false, children }: ModalShellProps) {
   const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -34,7 +35,7 @@ export function ModalShell({ labelledBy, onClose, children }: ModalShellProps) {
   }, []);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key === 'Escape') {
+    if (event.key === 'Escape' && !closeDisabled) {
       event.preventDefault();
       onClose();
       return;
