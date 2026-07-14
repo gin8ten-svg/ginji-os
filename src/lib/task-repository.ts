@@ -146,7 +146,7 @@ export function createInitialStore(now = new Date()): TaskStore {
   };
 }
 
-export class LocalStorageTaskRepository implements TaskRepository {
+export class LocalTaskRepository implements TaskRepository {
   constructor(
     private readonly storage?: StorageAdapter,
     private readonly now: () => Date = () => new Date(),
@@ -191,6 +191,9 @@ export class LocalStorageTaskRepository implements TaskRepository {
     return initial;
   }
 }
+
+/** @deprecated Use LocalTaskRepository. Kept for compatibility with Milestone 1 callers. */
+export { LocalTaskRepository as LocalStorageTaskRepository };
 
 export function createId(prefix: 'task' | 'routine'): string {
   return `${prefix}-${crypto.randomUUID()}`;

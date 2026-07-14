@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { AuthStatus } from '@/components/auth-status';
 
 const navigation = [
   { href: '/today', label: 'Today' },
@@ -22,9 +23,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <p className="text-xs font-semibold uppercase tracking-[0.3em] text-brand-600">Ginji OS</p>
               <h1 className="text-lg font-semibold">Daily planning prototype</h1>
             </div>
-            <div className="rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand-600">
-              Mobile-first UI
-            </div>
+            <AuthStatus />
           </div>
         </header>
         <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6">{children}</main>
