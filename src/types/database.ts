@@ -71,6 +71,17 @@ export type RoutineCompletionRow = {
   updated_at: string;
 }
 
+export type CalendarConnectionRow = {
+  user_id: string;
+  encrypted_refresh_token: string;
+  token_format_version: number;
+  granted_scopes: string[];
+  selected_calendar_ids: string[];
+  needs_reconnect: boolean;
+  connected_at: string;
+  updated_at: string;
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -79,6 +90,7 @@ export interface Database {
       tasks: Table<TaskRow, Partial<TaskRow> & Pick<TaskRow, 'user_id' | 'title' | 'priority' | 'estimated_minutes'>>;
       routines: Table<RoutineRow, Partial<RoutineRow> & Pick<RoutineRow, 'user_id' | 'name' | 'frequency_type' | 'estimated_minutes' | 'priority'>>;
       routine_completions: Table<RoutineCompletionRow, Partial<RoutineCompletionRow> & Pick<RoutineCompletionRow, 'user_id' | 'routine_id' | 'target_date'>>;
+      calendar_connections: Table<CalendarConnectionRow, Partial<CalendarConnectionRow> & Pick<CalendarConnectionRow, 'user_id' | 'encrypted_refresh_token'>>;
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

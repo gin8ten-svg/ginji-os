@@ -22,6 +22,14 @@ Supabase Auth + Google OAuth。
 ### Calendar integration
 
 Google Calendar API。
+追加同意の開始ユーザーは用途分離した秘密鍵で署名した短命HttpOnly Cookieへ記録し、OAuth callback後の
+認証ユーザーと一致した場合だけ暗号化Refresh Tokenを保存する。APIはページ数・件数を制限し、個人データを
+返すレスポンスは `private, no-store` とする。
+
+Calendar権限は通常ログインから分離し、Calendar画面の明示的な接続操作でのみ
+`calendar.events.readonly` と `calendar.calendarlist.readonly` を要求する。Google API呼び出しは
+Route Handlerに限定し、Access Tokenは永続化しない。Refresh TokenはAES-256-GCMで暗号化して
+`calendar_connections` に保存する。外部イベントはDBへ複製せず、クライアントの一時状態だけで扱う。
 
 ### AI planning
 
@@ -60,8 +68,9 @@ AIは計画案を返すだけで、実際の予定作成はサーバーが検証
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 - `OPENAI_API_KEY`
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_OAUTH_CLIENT_ID`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+- `CALENDAR_TOKEN_ENCRYPTION_KEY`
 - `NEXT_PUBLIC_APP_URL`
 
 OpenAI APIキー、Googleクライアントシークレットはサーバー専用。現在のSupabase基盤はservice roleキーを使用しない。
