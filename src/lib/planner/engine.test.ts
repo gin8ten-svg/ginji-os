@@ -68,19 +68,20 @@ describe('Deterministic task and routine placement', () => {
   });
 
   it('分割不可タスクは連続枠がなければ配置しない', () => {
-    const result = buildPlanningResult({ now, events: [event('busy', iso('2026-07-15', '10:00'), iso('2026-07-21', '21:30'))], tasks: [task({ id: 'solid', title: 'solid', splittable: false, remainingMinutes: 120 })], routines: [], completions: [] });
+    const result = buildPlanningResult({ now, events: [event('busy', iso('2026-07-15', '10:00'), iso('2026-07-21', '21:30'))], tasks: [task({ id: 'solid', title: 'solid', splittable: false, estimatedMinutes: 120, remainingMinutes: 120 })], routines: [], completions: [] });
     expect(result.proposedBlocks.filter((item) => item.taskId === 'solid')).toHaveLength(0);
-    expect(result.unscheduledTasks[0].reason).toBe('連続した空き時間不足');
+    expect(result.unscheduledTasks[0].reason).toContain('連続した空き時間');
   });
 
-  it('minimumBlockMinutes未満の残り時間を単独ブロックにしない', () => {
+  it('minimumBlockMinutes未満の残り時間を単独ブロックで救済する', () => {
     const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'tiny', title: 'tiny', remainingMinutes: 20, minimumBlockMinutes: 25 })], routines: [], completions: [] });
-    expect(result.proposedBlocks.some((item) => item.taskId === 'tiny')).toBe(false);
-    expect(result.unscheduledTasks[0].reason).toBe('最小ブロックを確保できない');
+    const block = result.proposedBlocks.find((item) => item.taskId === 'tiny');
+    expect((new Date(block!.end).getTime() - new Date(block!.start).getTime()) / 60_000).toBe(20);
+    expect(result.unscheduledTasks).toHaveLength(0);
   });
 
   it('期限後には配置せず不足分を未配置にする', () => {
-    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'due', title: 'due', remainingMinutes: 600, dueAt: iso('2026-07-15', '12:00') })], routines: [], completions: [] });
+    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'due', title: 'due', estimatedMinutes: 600, remainingMinutes: 600, dueAt: iso('2026-07-15', '12:00') })], routines: [], completions: [] });
     expect(result.proposedBlocks.every((item) => item.taskId !== 'due' || new Date(item.end) <= new Date(iso('2026-07-15', '12:00')))).toBe(true);
     expect(result.unscheduledTasks[0].taskId).toBe('due');
   });
@@ -103,5 +104,60 @@ describe('Deterministic task and routine placement', () => {
   it('同じ入力は同じ結果を返す', () => {
     const input = { now, events: [event('fixed', iso('2026-07-15', '12:00'), iso('2026-07-15', '13:00'))], tasks: [task({ id: 'a', title: 'A' })], routines: [routine({ id: 'r', name: 'R' })], completions: [] };
     expect(buildPlanningResult(input)).toEqual(buildPlanningResult(input));
+  });
+
+  it('期限当日priority 5 Taskを自由Routineより優先する', () => {
+    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'urgent', title: 'urgent', priority: 5, splittable: false, estimatedMinutes: 780, remainingMinutes: 780, dueAt: iso('2026-07-15', '22:00') })], routines: [routine({ id: 'flex', name: 'flex', priority: 1, frequency: { type: 'weekdays', weekdays: [3] } })], completions: [] });
+    expect(result.proposedBlocks[0].taskId).toBe('urgent');
+    expect(result.unscheduledRoutines[0].routineId).toBe('flex');
+  });
+
+  it('狭い時間帯Routineを期限が遠いTaskより先に確保する', () => {
+    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'later', title: 'later', dueAt: iso('2026-07-20', '18:00'), estimatedMinutes: 780, remainingMinutes: 780 })], routines: [routine({ id: 'narrow', name: 'narrow', frequency: { type: 'weekdays', weekdays: [3] }, availableStartTime: '09:00', availableEndTime: '09:30' })], completions: [] });
+    expect(result.proposedBlocks[0].routineId).toBe('narrow');
+  });
+
+  it('分割末尾の小さい残りを次の連続枠へ救済する', () => {
+    const blockers = [event('b1', iso('2026-07-15', '09:25'), iso('2026-07-15', '10:00')), event('b2', iso('2026-07-15', '10:25'), iso('2026-07-15', '11:00')), event('b3', iso('2026-07-15', '11:30'), iso('2026-07-15', '22:00')), event('future', '2026-07-16', '2026-07-22', true)];
+    const result = buildPlanningResult({ now, events: blockers, tasks: [task({ id: 'tail', title: 'tail', remainingMinutes: 60, minimumBlockMinutes: 25 })], routines: [], completions: [] });
+    expect(result.proposedBlocks.filter((item) => item.taskId === 'tail').map((item) => (new Date(item.end).getTime() - new Date(item.start).getTime()) / 60_000)).toEqual([25, 25, 10]);
+  });
+
+  it('残り15分に対して10分の空きしかなければ理由付きで未配置にする', () => {
+    const result = buildPlanningResult({ now, events: [event('today', iso('2026-07-15', '09:10'), iso('2026-07-15', '22:00')), event('future', '2026-07-16', '2026-07-22', true)], tasks: [task({ id: 'tiny-no-fit', title: 'tiny-no-fit', remainingMinutes: 15, minimumBlockMinutes: 25 })], routines: [], completions: [] });
+    expect(result.proposedBlocks.some((item) => item.taskId === 'tiny-no-fit')).toBe(false);
+    expect(result.unscheduledTasks[0].reason).toContain('残り15分');
+  });
+
+  it('remainingMinutesを0以上estimatedMinutes以下へ正規化する', () => {
+    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'zero', title: 'zero', remainingMinutes: 0 }), task({ id: 'negative', title: 'negative', remainingMinutes: -5 }), task({ id: 'over', title: 'over', estimatedMinutes: 30, remainingMinutes: 90 })], routines: [], completions: [] });
+    expect(result.proposedBlocks.some((item) => item.taskId === 'zero' || item.taskId === 'negative')).toBe(false);
+    const over = result.proposedBlocks.filter((item) => item.taskId === 'over');
+    expect(over.reduce((sum, item) => sum + (new Date(item.end).getTime() - new Date(item.start).getTime()) / 60_000, 0)).toBe(30);
+  });
+
+  it('7日すべて終日busyならRoutineを理由付きで未配置にする', () => {
+    const result = buildPlanningResult({ now, events: [event('all', '2026-07-15', '2026-07-22', true)], tasks: [], routines: [routine({ id: 'r', name: 'r' })], completions: [] });
+    expect(result.proposedBlocks).toHaveLength(0);
+    expect(result.unscheduledRoutines).toHaveLength(7);
+    expect(result.unscheduledRoutines.every((item) => item.reason === 'Google予定と競合')).toBe(true);
+  });
+
+  it('同期限・同priorityのTask/Routine候補を安定フィールドで決定する', () => {
+    const input = { now, events: [], tasks: [task({ id: 'b', title: 'b', dueAt: iso('2026-07-15', '22:00') }), task({ id: 'a', title: 'a', dueAt: iso('2026-07-15', '22:00') })], routines: [routine({ id: 'r', name: 'r', frequency: { type: 'weekdays' as const, weekdays: [3] } })], completions: [] };
+    const one = buildPlanningResult(input); const two = buildPlanningResult(input);
+    expect(one).toEqual(two);
+    expect(one.proposedBlocks.filter((item) => item.source === 'task').map((item) => item.taskId)).toEqual(['a', 'b']);
+  });
+
+  it('期限なしTask複数をpriorityと安定IDで決定論的に並べる', () => {
+    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'z', title: 'z', priority: 2 }), task({ id: 'b', title: 'b', priority: 5 }), task({ id: 'a', title: 'a', priority: 5 })], routines: [], completions: [] });
+    expect(result.proposedBlocks.filter((item) => item.source === 'task').map((item) => item.taskId)).toEqual(['a', 'b', 'z']);
+  });
+
+  it('複雑なTask/Routine競合でも全ブロックが重複しない', () => {
+    const result = buildPlanningResult({ now, events: [event('meeting', iso('2026-07-15', '12:00'), iso('2026-07-15', '13:00'))], tasks: [task({ id: 't1', title: 't1', remainingMinutes: 180 }), task({ id: 't2', title: 't2', remainingMinutes: 90, priority: 5 })], routines: [routine({ id: 'r1', name: 'r1', frequency: { type: 'weekdays', weekdays: [3] }, availableStartTime: '10:00', availableEndTime: '12:00' }), routine({ id: 'r2', name: 'r2', frequency: { type: 'weekdays', weekdays: [3] } })], completions: [] });
+    const blocks = [...result.proposedBlocks].sort((a, b) => a.start.localeCompare(b.start));
+    for (let index = 1; index < blocks.length; index += 1) expect(new Date(blocks[index - 1].end) <= new Date(blocks[index].start)).toBe(true);
   });
 });

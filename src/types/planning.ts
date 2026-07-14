@@ -33,7 +33,14 @@ export interface UnscheduledTask {
   taskId: string;
   title: string;
   remainingMinutes: number;
-  reason: '期限内の空き時間不足' | '連続した空き時間不足' | '最小ブロックを確保できない';
+  reason: string;
+}
+
+export interface UnscheduledRoutine {
+  routineId: string;
+  title: string;
+  targetDate: string;
+  reason: '指定時間帯に空きがない' | 'Google予定と競合' | '稼働可能時間外' | '所要時間を確保できない';
 }
 
 export interface PlanningResult {
@@ -42,4 +49,6 @@ export interface PlanningResult {
   freeSlots: FreeSlot[];
   proposedBlocks: ProposedTimeBlock[];
   unscheduledTasks: UnscheduledTask[];
+  unscheduledRoutines: UnscheduledRoutine[];
+  warnings: string[];
 }

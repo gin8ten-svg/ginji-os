@@ -15,7 +15,7 @@ import { useTokyoDateKey } from '@/lib/use-tokyo-date';
 import type { Task } from '@/types/tasks';
 
 export default function TodayPage() {
-  const { store, isLoading, isSaving, error, successMessage, recoveryNotice, retry, saveTask, toggleRoutineCompletion } = useTaskData();
+  const { store, isAuthenticated, isLoading, isSaving, error, successMessage, recoveryNotice, retry, saveTask, toggleRoutineCompletion } = useTaskData();
   const [quickAdd, setQuickAdd] = useState(false);
   const today = useTokyoDateKey();
   const tasks = useMemo(() => today ? todayDashboardTasks(store?.tasks ?? [], today) : [], [store?.tasks, today]);
@@ -58,7 +58,7 @@ export default function TodayPage() {
         {routines.length === 0 ? <p className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">今日実施するルーティンはありません。</p> : <div className="mt-4 space-y-3">{routines.map((routine) => { const completed = completedRoutineIds.has(routine.id); return <article key={routine.id} className="flex items-start gap-3 rounded-2xl bg-violet-50 p-3"><button disabled={isSaving} type="button" onClick={() => toggleRoutineCompletion(routine.id, today)} aria-label={`${routine.name}を${completed ? '未完了に戻す' : '完了にする'}`} className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 disabled:opacity-50 ${completed ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-violet-400 bg-white text-violet-700'}`}>{completed ? '✓' : '○'}</button><div className="min-w-0"><h4 className={`break-words font-semibold ${completed ? 'text-slate-500 line-through' : ''}`}>{routine.name}</h4><p className="mt-1 text-sm text-slate-600">{routine.estimatedMinutes}分・優先度 {routine.priority}</p></div></article>; })}</div>}
       </section>
 
-      <PlannerPanel store={store} />
+      <PlannerPanel store={store} isAuthenticated={isAuthenticated} />
     </> : null}
 
     {quickAdd && today ? <TaskFormModal initialDueAt={new Date(`${today}T23:59:00+09:00`).toISOString()} isSubmitting={isSaving} onClose={() => setQuickAdd(false)} onSave={saveTask} /> : null}
