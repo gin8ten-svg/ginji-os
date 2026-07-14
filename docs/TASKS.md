@@ -29,6 +29,7 @@
 - [x] RLS
 - [x] ToDo CRUD
 - [x] ユーザー設定
+- [ ] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する
 
 ## Milestone 3 — Calendar read
 
