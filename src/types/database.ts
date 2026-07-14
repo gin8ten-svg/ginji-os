@@ -82,6 +82,19 @@ export type CalendarConnectionRow = {
   updated_at: string;
 }
 
+export type PlanningSessionRow = {
+  id: string; user_id: string; status: 'draft' | 'approved' | 'rejected' | 'superseded';
+  window_start: string; window_end: string; input_now: string; input_hash: string; engine_version: string;
+  warning_codes: string[]; result_summary: Json; created_at: string; updated_at: string;
+  approved_at: string | null; rejected_at: string | null;
+}
+
+export type PlanningBlockRow = {
+  id: string; planning_session_id: string; user_id: string; source_type: 'task' | 'routine';
+  source_entity_id: string; title: string; start_at: string; end_at: string; block_index: number;
+  duration_minutes: number; metadata: Json; created_at: string;
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -91,9 +104,14 @@ export interface Database {
       routines: Table<RoutineRow, Partial<RoutineRow> & Pick<RoutineRow, 'user_id' | 'name' | 'frequency_type' | 'estimated_minutes' | 'priority'>>;
       routine_completions: Table<RoutineCompletionRow, Partial<RoutineCompletionRow> & Pick<RoutineCompletionRow, 'user_id' | 'routine_id' | 'target_date'>>;
       calendar_connections: Table<CalendarConnectionRow, Partial<CalendarConnectionRow> & Pick<CalendarConnectionRow, 'user_id' | 'encrypted_refresh_token'>>;
+      planning_sessions: Table<PlanningSessionRow, Partial<PlanningSessionRow> & Pick<PlanningSessionRow, 'user_id' | 'window_start' | 'window_end' | 'input_now' | 'input_hash' | 'engine_version'>>;
+      planning_blocks: Table<PlanningBlockRow, Partial<PlanningBlockRow> & Pick<PlanningBlockRow, 'planning_session_id' | 'user_id' | 'source_type' | 'source_entity_id' | 'title' | 'start_at' | 'end_at' | 'duration_minutes'>>;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      approve_planning_session: { Args: { p_session_id: string; p_input_hash: string }; Returns: string };
+      reject_planning_session: { Args: { p_session_id: string }; Returns: string };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
