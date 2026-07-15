@@ -5,7 +5,7 @@ import { calendarAccessContext } from '@/lib/calendar/server';
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
 import { adviceView, AI_ADVISOR_VERSION, buildPlanningAdviceInput, orderingSourceIds, sanitizeAdvice } from '@/lib/planning/advisor';
 import { OpenAIPlanningAdvisor } from '@/lib/planning/openai-advisor';
-import { planningInputHash, PLANNING_ENGINE_VERSION } from '@/lib/planning/hash';
+import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, PLANNING_ENGINE_VERSION, PLANNING_INPUT_SNAPSHOT_VERSION, validatePlanningInputSnapshotV2, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
 import { PlanningApiError } from '@/lib/planning/responses';
 import { SupabaseTaskRepository } from '@/lib/supabase-task-repository';
 import { createClient } from '@/lib/supabase/server';
@@ -51,8 +51,9 @@ async function calendarEvents(now: Date): Promise<{ events: Awaited<ReturnType<t
 export async function currentPlanningInput(client: SupabaseClient<Database>, userId: string, now: Date) {
   const [store, calendar] = await Promise.all([new SupabaseTaskRepository(client, userId).loadStore(), calendarEvents(now)]);
   const result = buildPlanningResult({ now, events: calendar.events, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions });
-  const hash = planningInputHash({ window: result.window, now, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions, events: calendar.events });
-  return { store, events: calendar.events, result: { ...result, warnings: calendar.warningCodes.map((code) => warningText[code] ?? code) }, warningCodes: calendar.warningCodes, hash };
+  const snapshot = buildPlanningInputSnapshotV2({ window: result.window, now, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions, events: calendar.events });
+  const hash = hashPlanningInputSnapshotV2(snapshot);
+  return { store, events: calendar.events, result: { ...result, warnings: calendar.warningCodes.map((code) => warningText[code] ?? code) }, warningCodes: calendar.warningCodes, snapshot, hash };
 }
 
 function blockInsert(sessionId: string, userId: string, block: ProposedTimeBlock) {
@@ -83,16 +84,19 @@ function parseAdviceView(value: Json | undefined): PlanningAdviceView | null {
 
 async function persistPlanningSession(client: SupabaseClient<Database>, userId: string, input: PlanningInput, result: PlanningResult, options: { inputNow: Date; engineVersion: string; warningCodes: string[]; advice?: PlanningAdviceView | null; idempotencyKey?: string | null }): Promise<PlanningSessionDetail> {
   const blocks = result.proposedBlocks.map((block) => { const value = blockInsert('pending', userId, block); return { source_type: value.source_type, source_entity_id: value.source_entity_id, title: value.title, start_at: value.start_at, end_at: value.end_at, block_index: value.block_index, duration_minutes: value.duration_minutes, metadata: value.metadata }; });
-  const { data: sessionId, error } = await client.rpc('create_planning_session', { p_idempotency_key: options.idempotencyKey ?? null, p_window_start: result.window.start, p_window_end: result.window.end, p_input_now: options.inputNow.toISOString(), p_input_hash: input.hash, p_engine_version: options.engineVersion, p_warning_codes: options.warningCodes, p_result_summary: resultSummary(result, options.advice), p_blocks: blocks as unknown as Json });
+  const { data: sessionId, error } = await client.rpc('create_planning_session_v2', { p_idempotency_key: options.idempotencyKey ?? null, p_window_start: result.window.start, p_window_end: result.window.end, p_input_now: options.inputNow.toISOString(), p_input_hash: input.hash, p_input_snapshot_version: PLANNING_INPUT_SNAPSHOT_VERSION, p_input_snapshot: input.snapshot as unknown as Json, p_engine_version: options.engineVersion, p_warning_codes: options.warningCodes, p_result_summary: resultSummary(result, options.advice), p_blocks: blocks as unknown as Json });
   if (error || !sessionId) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を保存できませんでした。', 500);
   return getPlanningSession(client, userId, sessionId);
 }
 
 export async function createPlanningSession(client: SupabaseClient<Database>, userId: string, idempotencyKey: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
   const deps = { ...defaultDependencies, ...dependencies };
-  const { data: existing, error } = await client.from('planning_sessions').select('id').eq('user_id', userId).eq('idempotency_key', idempotencyKey).maybeSingle();
+  const { data: existing, error } = await client.from('planning_sessions').select('id,input_snapshot_version').eq('user_id', userId).eq('idempotency_key', idempotencyKey).maybeSingle();
   if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を確認できませんでした。', 500);
-  if (existing) return getPlanningSession(client, userId, existing.id);
+  if (existing) {
+    if (existing.input_snapshot_version !== PLANNING_INPUT_SNAPSHOT_VERSION) throw legacySnapshotError();
+    return getPlanningSession(client, userId, existing.id);
+  }
   const now = deps.now();
   const input = await deps.loadCurrentInput(client, userId, now);
   return persistPlanningSession(client, userId, input, input.result, { inputNow: now, engineVersion: PLANNING_ENGINE_VERSION, warningCodes: input.warningCodes, idempotencyKey });
@@ -111,11 +115,22 @@ function proposedFromRow(row: PlanningBlockRow): ProposedTimeBlock {
 
 export function detailFromRows(session: PlanningSessionRow, blocks: PlanningBlockRow[]): PlanningSessionDetail {
   const summary = summaryData(session.result_summary);
-  return { sessionId: session.id, status: session.status, windowStart: session.window_start, windowEnd: session.window_end, blocks: blocks.map(proposedFromRow), ...summary, warnings: session.warning_codes.map((code) => warningText[code] ?? code), inputHash: session.input_hash, engineVersion: session.engine_version, createdAt: session.created_at, approvedAt: session.approved_at, rejectedAt: session.rejected_at };
+  return { sessionId: session.id, status: session.status, windowStart: session.window_start, windowEnd: session.window_end, blocks: blocks.map(proposedFromRow), ...summary, warnings: session.warning_codes.map((code) => warningText[code] ?? code), engineVersion: session.engine_version, createdAt: session.created_at, approvedAt: session.approved_at, rejectedAt: session.rejected_at };
 }
 
 interface AdviceDependencies extends PlanningServerDependencies { advisor: () => PlanningAdvisor & { model?: string }; signal?: AbortSignal; }
 const defaultAdviceDependencies: AdviceDependencies = { ...defaultDependencies, advisor: () => new OpenAIPlanningAdvisor() };
+
+const legacySnapshotError = () => new PlanningApiError('PLAN_STALE', 'この計画案は旧形式です。新しい計画案を作成してください。', 409);
+
+export function verifyStoredPlanningSnapshot(row: Pick<PlanningSessionRow, 'input_snapshot_version' | 'input_snapshot' | 'input_hash'>): PlanningInputSnapshotV2 {
+  if (row.input_snapshot_version === null && row.input_snapshot === null) throw legacySnapshotError();
+  if (row.input_snapshot_version !== PLANNING_INPUT_SNAPSHOT_VERSION || !validatePlanningInputSnapshotV2(row.input_snapshot)) {
+    throw new PlanningApiError('PLAN_INVALID', '保存済みの計画入力を検証できませんでした。', 409);
+  }
+  if (hashPlanningInputSnapshotV2(row.input_snapshot) !== row.input_hash) throw new PlanningApiError('PLAN_INVALID', '保存済みの計画入力を検証できませんでした。', 409);
+  return row.input_snapshot;
+}
 
 export async function createAdvisedPlanningSession(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<AdviceDependencies> = {}): Promise<PlanningSessionDetail> {
   const deps = { ...defaultAdviceDependencies, ...dependencies }; const now = deps.now();
@@ -124,6 +139,7 @@ export async function createAdvisedPlanningSession(client: SupabaseClient<Databa
   const { data: row, error: rowError } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
   if (rowError) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を取得できませんでした。', 500);
   if (!row) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  verifyStoredPlanningSnapshot(row);
   const input = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (input.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
   if (!validateStoredPlan(saved.blocks, input.result, input.store)) throw new PlanningApiError('PLAN_INVALID', '元の計画案を再検証できませんでした。', 422);
@@ -207,6 +223,7 @@ async function planningSnapshotForApproval(client: SupabaseClient<Database>, use
 export async function approvePlanningSession(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
   const deps = { ...defaultDependencies, ...dependencies };
   const { saved, row, blocksRevision } = await planningSnapshotForApproval(client, userId, id);
+  verifyStoredPlanningSnapshot(row);
   const current = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
   const owned = new Set([...current.store.tasks.map((item) => `task:${item.id}`), ...current.store.routines.map((item) => `routine:${item.id}`)]);

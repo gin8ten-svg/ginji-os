@@ -11,7 +11,7 @@ export interface PlanningAdviceView {
 export interface PlanningSessionDetail {
   sessionId: string; status: PlanningSessionStatus; windowStart: string; windowEnd: string;
   blocks: ProposedTimeBlock[]; unscheduledTasks: UnscheduledTask[]; unscheduledRoutines: UnscheduledRoutine[];
-  warnings: string[]; inputHash: string; engineVersion: string; createdAt: string;
+  warnings: string[]; engineVersion: string; createdAt: string;
   approvedAt: string | null; rejectedAt: string | null;
   advice: PlanningAdviceView | null;
 }

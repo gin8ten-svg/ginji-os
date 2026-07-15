@@ -16,7 +16,7 @@ const fullDate = (value: string) => new Intl.DateTimeFormat('ja-JP', { timeZone:
 const statusText: Record<PlanningSessionStatus, string> = { draft: '下書き', approved: '承認済み', rejected: '却下済み', superseded: '更新済み' };
 
 function localDetail(result: PlanningResult): PlanningSessionDetail {
-  return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, inputHash: '', engineVersion: 'deterministic-v1', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null };
+  return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, engineVersion: 'deterministic-v2', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null };
 }
 
 export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isAuthenticated: boolean }) {

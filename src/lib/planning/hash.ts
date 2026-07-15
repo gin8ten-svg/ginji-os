@@ -5,7 +5,8 @@ import type { ExternalCalendarEvent } from '@/types/calendar';
 import type { PlanningWindow } from '@/types/planning';
 import type { Routine, RoutineCompletion, Task } from '@/types/tasks';
 
-export const PLANNING_ENGINE_VERSION = 'deterministic-v1';
+export const LEGACY_PLANNING_ENGINE_VERSION = 'deterministic-v1';
+export { PLANNING_ENGINE_VERSION } from '@/lib/planning/input-snapshot-v2';
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -18,7 +19,7 @@ export function planningInputHash(input: { window: PlanningWindow; now: Date; ta
   const tasks = input.tasks.map((task) => ({ id: task.id, dueAt: task.dueAt, priority: task.priority, estimatedMinutes: task.estimatedMinutes, remainingMinutes: task.remainingMinutes, splittable: task.splittable, minimumBlockMinutes: task.minimumBlockMinutes, completedAt: task.completedAt, updatedAt: task.updatedAt })).sort((a, b) => a.id.localeCompare(b.id));
   const routines = input.routines.map((routine) => ({ id: routine.id, frequency: routine.frequency, estimatedMinutes: routine.estimatedMinutes, priority: routine.priority, availableStartTime: routine.availableStartTime, availableEndTime: routine.availableEndTime, isActive: routine.isActive, updatedAt: routine.updatedAt })).sort((a, b) => a.id.localeCompare(b.id));
   const completions = input.completions.map((item) => ({ routineId: item.routineId, date: item.date, completedAt: item.completedAt })).sort((a, b) => a.routineId.localeCompare(b.routineId) || a.date.localeCompare(b.date));
-  return createHash('sha256').update(canonical({ window: input.window, now: input.now.toISOString(), tasks, routines, completions, busy, engineVersion: input.engineVersion ?? PLANNING_ENGINE_VERSION })).digest('hex');
+  return createHash('sha256').update(canonical({ window: input.window, now: input.now.toISOString(), tasks, routines, completions, busy, engineVersion: input.engineVersion ?? LEGACY_PLANNING_ENGINE_VERSION })).digest('hex');
 }
 
 export function canonicalizeForTest(value: unknown): string { return canonical(value); }
