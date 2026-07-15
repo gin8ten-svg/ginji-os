@@ -70,6 +70,7 @@
 - [ ] Googleイベント作成
 - [ ] 冪等性
 - [x] approved/rejected/superseded SessionとblockのDB不変化
+- [ ] 非本番DBでBlock DELETE RPC対Approvalの真の並列transactionとauth.users CASCADE削除を実証
 - [x] duration_minutesとstart/endのDB整合制約
 - [ ] Calendar書き込み直前の完全再検証
 - [ ] 失敗時ロールバック方針

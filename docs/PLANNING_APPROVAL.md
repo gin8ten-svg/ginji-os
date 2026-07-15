@@ -41,14 +41,19 @@ Session生成RPCはSessionとblocksを単一transactionで保存する。Session
 基準時刻、summary、warning、作成日時、idempotency keyは生成後に変更できない。`draft` から許可するstatus遷移は
 `approved`、`rejected`、`superseded` だけで、terminal SessionはUPDATEできず、authenticated利用者は直接DELETEできない。承認・却下時刻はDB時刻で確定する。
 
-planning_blocksは親Sessionがdraftの間だけINSERT・UPDATE・DELETEできる。terminal親のblock追加、削除、時刻、参照先、
+planning_blocksは親Sessionがdraftの間だけINSERT・UPDATEできる。terminal親のblock追加、削除、時刻、参照先、
 順序、duration、metadata変更はRLSとtriggerの両方で拒否する。start/endは秒・ミリ秒を含まない分境界とし、
 `duration_minutes = extract(epoch from (end_at - start_at)) / 60` の完全一致をDB constraintで保証する。丸め補正はしない。
 
-各block変更は親の `blocks_revision` を単調増加させる。承認処理は検証時revisionをDBへ渡し、親行を
+各block変更は親の `blocks_revision` を単調増加させる。Block DELETEは副作用のないRLS述語では扱わず、
+authenticatedのtable直接DELETEを禁止したうえで `delete_planning_block(uuid)` RPCだけを正規経路とする。
+RPCはBlock行、親Session行の順にロックし、revision増加と1件のDELETEを単一transactionで実行する。
+削除失敗時はtransaction全体をrollbackし、terminal親や他ユーザー・存在しないBlockは同じ `NOT_DELETED` を返す。
+
+承認処理は検証時revisionをDBへ渡し、親行を
 `SELECT ... FOR UPDATE`でロックしてhash・status・revisionがすべて一致する場合だけapprovedへ遷移する。
 block変更と承認のどちらが先でも、未検証blockを含むapproved状態は成立しない。revisionは内部値でAPIへ返さない。
-Session/blockのDELETE triggerは設けず、利用者の直接削除はtable権限とRLSで制限するため、正式なアカウント削除時の
+Session/blockのDELETE triggerは設けず、RLS policyにも副作用関数を置かないため、正式なアカウント削除時の
 `auth.users → planning_sessions → planning_blocks` FK CASCADEを阻害しない。
 
 ## AI and Calendar boundary
@@ -72,3 +77,4 @@ approvedだけを条件にGoogle APIを呼ばず、現在のapprove RPCを単独
 
 - 一般公開前にローカルSupabaseまたは隔離環境で2ユーザーRLS分離と真の並列POSTを実証する。
 - 非本番DBでblock変更とApprovalの同時transaction、およびterminal Sessionを持つアカウントのCASCADE削除を実証する。
+- 非本番DBでBlock DELETE RPCとApprovalの真の並列transactionを実証する。

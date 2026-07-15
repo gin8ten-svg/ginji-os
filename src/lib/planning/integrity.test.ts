@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync('supabase/migrations/20260715000700_planning_integrity_hardening.sql', 'utf8');
 const raceMigration = readFileSync('supabase/migrations/20260715000800_planning_approval_race_fix.sql', 'utf8');
+const deleteMigration = readFileSync('supabase/migrations/20260715000900_planning_block_delete_rpc.sql', 'utf8');
 const client = readFileSync('src/lib/planning/client.ts', 'utf8');
 const server = readFileSync('src/lib/planning/server.ts', 'utf8');
 const publicTypes = readFileSync('src/types/planning-session.ts', 'utf8');
@@ -82,8 +83,89 @@ describe('planning approval race correction migration', () => {
     for (const policy of ['planning_sessions_insert_own', 'planning_sessions_update_own', 'planning_sessions_delete_own']) expect(raceMigration).toContain(`drop policy if exists ${policy}`);
     expect(raceMigration).not.toContain('drop policy planning_sessions_select_own');
   });
-  it('block先行・approval先行のどちらでも未検証approvedを作らない', () => {
-    const blockFirst = { status: 'draft', revision: 0 }; blockFirst.revision += 1; expect(blockFirst.status === 'draft' && blockFirst.revision === 0).toBe(false);
-    const approvalFirst: { status: 'draft' | 'approved'; revision: number } = { status: 'draft', revision: 0 }; if (approvalFirst.revision === 0) approvalFirst.status = 'approved'; expect(approvalFirst.status === 'draft').toBe(false); expect(approvalFirst.status).toBe('approved');
+});
+
+type FakeStatus = 'draft' | 'approved';
+
+class FakePlanningStore {
+  status: FakeStatus = 'draft';
+  revision = 0;
+  readonly block = { id: 'block-a', userId: 'user-a', sessionId: 'session-a' };
+  blockExists = true;
+
+  deleteBlock(blockId: string, userId: string, failDelete = false): 'DELETED' | 'NOT_DELETED' {
+    if (!this.blockExists || blockId !== this.block.id || userId !== this.block.userId) return 'NOT_DELETED';
+    if (this.status !== 'draft') return 'NOT_DELETED';
+    const before = { revision: this.revision, blockExists: this.blockExists };
+    this.revision += 1;
+    try {
+      if (failDelete) throw new Error('injected delete failure');
+      this.blockExists = false;
+      return 'DELETED';
+    } catch (error) {
+      this.revision = before.revision;
+      this.blockExists = before.blockExists;
+      throw error;
+    }
+  }
+
+  approve(expectedRevision: number): 'APPROVED' | 'BLOCKS_CHANGED' {
+    if (this.revision !== expectedRevision) return 'BLOCKS_CHANGED';
+    this.status = 'approved';
+    return 'APPROVED';
+  }
+}
+
+describe('planning block transactional delete migration', () => {
+  it('RLS副作用関数とDELETE policyを撤去し直接DELETE権限をrevoke', () => {
+    expect(deleteMigration).toContain('drop policy if exists planning_blocks_delete_own_draft');
+    expect(deleteMigration).toContain('drop function public.reserve_planning_block_delete(uuid, uuid)');
+    expect(deleteMigration).toContain('revoke delete on table public.planning_blocks from authenticated');
+    expect(deleteMigration).not.toMatch(/create policy[\s\S]*reserve_planning_block_delete/i);
+  });
+  it('user_id引数なしのSECURITY DEFINER RPCだけをauthenticatedへ公開', () => {
+    const signature = deleteMigration.slice(deleteMigration.indexOf('create function public.delete_planning_block('), deleteMigration.indexOf('returns text'));
+    expect(signature).toContain('p_block_id uuid'); expect(signature).not.toContain('user_id');
+    expect(deleteMigration).toContain('security definer'); expect(deleteMigration).toContain("set search_path = ''");
+    expect(deleteMigration).toContain('revoke all on function public.delete_planning_block(uuid) from public, anon, authenticated');
+    expect(deleteMigration).toContain('grant execute on function public.delete_planning_block(uuid) to authenticated');
+  });
+  it('Block→Session→DELETEのロック順と1件保証を明示', () => {
+    const blockLock = deleteMigration.indexOf('for update;');
+    const sessionLock = deleteMigration.indexOf('update public.planning_sessions');
+    const blockDelete = deleteMigration.indexOf('delete from public.planning_blocks');
+    expect(blockLock).toBeGreaterThan(0); expect(blockLock).toBeLessThan(sessionLock); expect(sessionLock).toBeLessThan(blockDelete);
+    expect(deleteMigration).toContain('get diagnostics deleted_count = row_count'); expect(deleteMigration).toContain('if deleted_count <> 1 then');
+  });
+  it('DELETE triggerを追加せずCASCADE経路をRPCから分離', () => {
+    expect(deleteMigration).not.toMatch(/create trigger/i); expect(deleteMigration).not.toMatch(/on delete cascade/i);
+    expect(deleteMigration).not.toMatch(/delete_planning_block[\s\S]*trigger/i);
+  });
+  it('自分のdraft Blockだけを削除しrevisionを正確に1増加', () => {
+    const store = new FakePlanningStore(); expect(store.deleteBlock('block-a', 'user-a')).toBe('DELETED');
+    expect(store.revision).toBe(1); expect(store.blockExists).toBe(false);
+  });
+  it.each([
+    ['他ユーザー', 'block-a', 'user-b'],
+    ['存在しないBlock', 'missing', 'user-a'],
+  ])('%sはNOT_DELETEDで状態を変えない', (_label, blockId, userId) => {
+    const store = new FakePlanningStore(); expect(store.deleteBlock(blockId, userId)).toBe('NOT_DELETED');
+    expect(store.revision).toBe(0); expect(store.blockExists).toBe(true);
+  });
+  it('terminal親ではNOT_DELETEDでrevisionもBlockも不変', () => {
+    const store = new FakePlanningStore(); store.status = 'approved';
+    expect(store.deleteBlock('block-a', 'user-a')).toBe('NOT_DELETED'); expect(store.revision).toBe(0); expect(store.blockExists).toBe(true);
+  });
+  it('DELETE失敗時はrevision増加もrollback', () => {
+    const store = new FakePlanningStore(); expect(() => store.deleteBlock('block-a', 'user-a', true)).toThrow('injected delete failure');
+    expect(store.revision).toBe(0); expect(store.blockExists).toBe(true);
+  });
+  it('Delete先行なら古いrevisionのApprovalを拒否', () => {
+    const store = new FakePlanningStore(); expect(store.deleteBlock('block-a', 'user-a')).toBe('DELETED');
+    expect(store.approve(0)).toBe('BLOCKS_CHANGED'); expect(store.status).toBe('draft');
+  });
+  it('Approval先行ならDeleteを拒否してapproved Blockを保持', () => {
+    const store = new FakePlanningStore(); expect(store.approve(0)).toBe('APPROVED');
+    expect(store.deleteBlock('block-a', 'user-a')).toBe('NOT_DELETED'); expect(store.blockExists).toBe(true); expect(store.revision).toBe(0);
   });
 });
