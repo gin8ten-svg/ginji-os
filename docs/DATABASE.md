@@ -107,9 +107,12 @@ Supabase Authのユーザーに紐づく設定。
 | created_at | timestamptz |
 | approved_at | timestamptz |
 | idempotency_key | uuid nullable、user単位partial unique |
+| input_snapshot_version | text nullable、V2はplanning-input-v2 |
+| input_snapshot | jsonb nullable、server-only canonical input |
 
 terminal status（approved/rejected/superseded）の行はUPDATE・DELETE不能。snapshot列はdraft中も変更せず、
 status遷移だけを専用RPCで行う。生成は `create_planning_session` がblocksと同一transactionで保存する。
+V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、legacy行はsnapshot列をnullのまま維持する。
 
 ## planning_blocks
 

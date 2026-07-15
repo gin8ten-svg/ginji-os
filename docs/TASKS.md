@@ -59,6 +59,7 @@
 - [x] Planning Session保存・stale検出・明示承認/却下
 - [x] AI-ready助言interface（外部providerなし）
 - [x] Planning Session生成のIdempotency-Key・原子的保存・重複request排除
+- [x] Planning Input Snapshot V2とtitle整合性基盤（Migration適用待ち）
 - [x] AI AdviceのDB原子rate limit
 - [ ] AI Adviceの利用量監視
 - [ ] 手動編集
@@ -67,6 +68,7 @@
 ## Milestone 5 — Calendar write
 
 - [ ] 承認画面
+- [ ] V2 Migration適用・動作確認後にGoogle Calendar Event Previewを実装
 - [ ] Googleイベント作成
 - [ ] 冪等性
 - [x] approved/rejected/superseded SessionとblockのDB不変化
@@ -76,6 +78,7 @@
 - [ ] 失敗時ロールバック方針
 - [ ] audit_logs
 - [ ] 作成済み予定の更新・削除
+- [ ] V2 rollout完了後、旧create_planning_session RPCを別Migrationでrevoke / drop
 
 ## Milestone 6 — Execution and review
 

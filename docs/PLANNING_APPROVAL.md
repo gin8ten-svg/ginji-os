@@ -26,6 +26,11 @@ hash再計算では生成時の `input_now` を維持して決定論性を保つ
 作成から24時間以上、Planning Window終了後、終了済みブロック、または開始から5分を超えたブロックを含む
 Sessionは `PLAN_STALE` として承認しない。
 
+新規Sessionでは `planning-input-v2` snapshotへTask/Routineのcanonical titleも保存し、snapshot全体からhashを
+生成する。承認前に保存snapshot自体のschema・許可field・hashを検査し、現在のserver inputからV2を再生成する。
+snapshot列はdraft中も不変で、API responseには含めない。snapshot列がnullのlegacy draftは自動補完せず、
+新しい計画案の作成を要求する。
+
 ## Authorization and API safety
 
 - 全APIはSupabase Authのユーザーをサーバーで取得する。
