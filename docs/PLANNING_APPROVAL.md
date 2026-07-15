@@ -39,11 +39,17 @@ Sessionは `PLAN_STALE` として承認しない。
 
 Session生成RPCはSessionとblocksを単一transactionで保存する。Session snapshotの入力hash、Engine version、期間、
 基準時刻、summary、warning、作成日時、idempotency keyは生成後に変更できない。`draft` から許可するstatus遷移は
-`approved`、`rejected`、`superseded` だけで、terminal SessionはUPDATE・DELETEできない。承認・却下時刻はDB時刻で確定する。
+`approved`、`rejected`、`superseded` だけで、terminal SessionはUPDATEできず、authenticated利用者は直接DELETEできない。承認・却下時刻はDB時刻で確定する。
 
 planning_blocksは親Sessionがdraftの間だけINSERT・UPDATE・DELETEできる。terminal親のblock追加、削除、時刻、参照先、
 順序、duration、metadata変更はRLSとtriggerの両方で拒否する。start/endは秒・ミリ秒を含まない分境界とし、
 `duration_minutes = extract(epoch from (end_at - start_at)) / 60` の完全一致をDB constraintで保証する。丸め補正はしない。
+
+各block変更は親の `blocks_revision` を単調増加させる。承認処理は検証時revisionをDBへ渡し、親行を
+`SELECT ... FOR UPDATE`でロックしてhash・status・revisionがすべて一致する場合だけapprovedへ遷移する。
+block変更と承認のどちらが先でも、未検証blockを含むapproved状態は成立しない。revisionは内部値でAPIへ返さない。
+Session/blockのDELETE triggerは設けず、利用者の直接削除はtable権限とRLSで制限するため、正式なアカウント削除時の
+`auth.users → planning_sessions → planning_blocks` FK CASCADEを阻害しない。
 
 ## AI and Calendar boundary
 
@@ -65,3 +71,4 @@ approvedだけを条件にGoogle APIを呼ばず、現在のapprove RPCを単独
 ## Deferred verification
 
 - 一般公開前にローカルSupabaseまたは隔離環境で2ユーザーRLS分離と真の並列POSTを実証する。
+- 非本番DBでblock変更とApprovalの同時transaction、およびterminal Sessionを持つアカウントのCASCADE削除を実証する。

@@ -191,12 +191,22 @@ export function planningFreshnessReason(session: Pick<PlanningSessionRow, 'creat
 
 const staleTimeError = () => new PlanningApiError('PLAN_STALE', '計画案の一部がすでに過去になっています。最新の計画案を作成してください。', 409);
 
+async function planningSnapshotForApproval(client: SupabaseClient<Database>, userId: string, id: string): Promise<{ saved: PlanningSessionDetail; row: PlanningSessionRow; blocksRevision: number }> {
+  const { data: row, error } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を取得できませんでした。', 500);
+  if (!row) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  if (row.status !== 'draft') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案だけを承認できます。', 409);
+  const { data: blocks, error: blockError } = await client.from('planning_blocks').select('*').eq('planning_session_id', id).eq('user_id', userId).order('start_at');
+  if (blockError) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を取得できませんでした。', 500);
+  const { data: revision, error: revisionError } = await client.from('planning_sessions').select('blocks_revision').eq('id', id).eq('user_id', userId).maybeSingle();
+  if (revisionError || !revision) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を取得できませんでした。', 500);
+  if (revision.blocks_revision !== row.blocks_revision) throw new PlanningApiError('PLAN_STALE', '計画案が変更されています。最新の計画案を作成してください。', 409);
+  return { saved: detailFromRows(row, blocks), row, blocksRevision: row.blocks_revision };
+}
+
 export async function approvePlanningSession(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
   const deps = { ...defaultDependencies, ...dependencies };
-  const saved = await getPlanningSession(client, userId, id);
-  if (saved.status !== 'draft') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案だけを承認できます。', 409);
-  const { data: row } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
-  if (!row) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  const { saved, row, blocksRevision } = await planningSnapshotForApproval(client, userId, id);
   const current = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
   const owned = new Set([...current.store.tasks.map((item) => `task:${item.id}`), ...current.store.routines.map((item) => `routine:${item.id}`)]);
@@ -205,8 +215,9 @@ export async function approvePlanningSession(client: SupabaseClient<Database>, u
   if (!validateStoredPlan(saved.blocks, expected, current.store)) throw new PlanningApiError('PLAN_INVALID', '計画案を再検証できませんでした。', 422);
   if (planningFreshnessReason(row, expected.proposedBlocks, deps.now())) throw staleTimeError();
   // approvedは確認状態にすぎない。将来のCalendar書き込みは直前の完全再検証と別の冪等APIを必須とする。
-  const { data, error } = await client.rpc('approve_planning_session', { p_session_id: id, p_input_hash: row.input_hash });
+  const { data, error } = await client.rpc('approve_planning_session', { p_session_id: id, p_input_hash: row.input_hash, p_blocks_revision: blocksRevision });
   if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を承認できませんでした。', 500);
+  if (data === 'BLOCKS_CHANGED') throw new PlanningApiError('PLAN_STALE', '計画案が変更されています。最新の計画案を作成してください。', 409);
   if (data !== 'APPROVED') throw new PlanningApiError('PLAN_NOT_DRAFT', '計画案の状態が変更されています。', 409);
   return getPlanningSession(client, userId, id);
 }

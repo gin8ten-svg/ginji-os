@@ -43,7 +43,7 @@ const sessionId = '22222222-2222-4222-8222-222222222222';
 const createdAt = '2026-07-15T00:00:00.000Z';
 const hash = 'a'.repeat(64);
 const block: ProposedTimeBlock = { id: 'block', source: 'task', taskId: '33333333-3333-4333-8333-333333333333', routineId: null, title: 'Task', start: '2026-07-15T02:00:00.000Z', end: '2026-07-15T03:00:00.000Z', splitIndex: 1 };
-const sessionRow = (status: PlanningSessionRow['status'] = 'draft'): PlanningSessionRow => ({ id: sessionId, user_id: userId, status, window_start: '2026-07-14T23:00:00.000Z', window_end: '2026-07-21T13:00:00.000Z', input_now: '2026-07-15T00:00:00.000Z', input_hash: hash, engine_version: 'deterministic-v1', warning_codes: [], result_summary: { unscheduledTasks: [], unscheduledRoutines: [] }, created_at: createdAt, updated_at: createdAt, approved_at: status === 'approved' ? '2026-07-15T00:30:00.000Z' : null, rejected_at: status === 'rejected' ? '2026-07-15T00:30:00.000Z' : null, idempotency_key: null });
+const sessionRow = (status: PlanningSessionRow['status'] = 'draft'): PlanningSessionRow => ({ id: sessionId, user_id: userId, status, window_start: '2026-07-14T23:00:00.000Z', window_end: '2026-07-21T13:00:00.000Z', input_now: '2026-07-15T00:00:00.000Z', input_hash: hash, engine_version: 'deterministic-v1', warning_codes: [], result_summary: { unscheduledTasks: [], unscheduledRoutines: [] }, created_at: createdAt, updated_at: createdAt, approved_at: status === 'approved' ? '2026-07-15T00:30:00.000Z' : null, rejected_at: status === 'rejected' ? '2026-07-15T00:30:00.000Z' : null, idempotency_key: null, blocks_revision: 1 });
 const blockRow: PlanningBlockRow = { id: '44444444-4444-4444-8444-444444444444', planning_session_id: sessionId, user_id: userId, source_type: 'task', source_entity_id: block.taskId!, title: block.title, start_at: block.start, end_at: block.end, block_index: 1, duration_minutes: 60, metadata: {}, created_at: createdAt };
 const store: TaskStore = { version: 1, tasks: [{ id: block.taskId!, title: 'Task', description: '', dueAt: null, priority: 3, estimatedMinutes: 60, remainingMinutes: 60, splittable: false, minimumBlockMinutes: 25, category: '', completedAt: null, createdAt, updatedAt: createdAt, source: 'user' }], routines: [], routineCompletions: [] };
 const result: PlanningResult = { window: { start: sessionRow().window_start, end: sessionRow().window_end, timeZone: 'Asia/Tokyo', workdayStart: '08:00', workdayEnd: '22:00', minimumSlotMinutes: 25, dates: ['2026-07-15'] }, busyIntervals: [], freeSlots: [], proposedBlocks: [block], unscheduledTasks: [], unscheduledRoutines: [], warnings: [] };
@@ -89,14 +89,14 @@ describe('planning server runtime workflows', () => {
   it('sessionとblocksの両方をuser_idで取得しsnapshot内部値を返さない', async () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow());
     const detail = await getPlanningSession(fake.client(), userId, sessionId);
-    expect(detail.sessionId).toBe(sessionId); expect(JSON.stringify(detail)).not.toMatch(/input_now|result_summary|user_id/);
+    expect(detail.sessionId).toBe(sessionId); expect(JSON.stringify(detail)).not.toMatch(/input_now|result_summary|user_id|blocks_revision/);
     fake.calls.forEach((call) => expect(call.filters).toContainEqual(['user_id', userId]));
   });
   it('他ユーザー相当の空結果はPLAN_NOT_FOUND', async () => { const fake = new FakeSupabase(); queueGet(fake, null, []); await expect(getPlanningSession(fake.client(), userId, sessionId)).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' }); });
   it('正常承認しDB hashだけをRPCへ渡す', async () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: 'APPROVED', error: null }); queueGet(fake, sessionRow('approved'));
     const detail = await approvePlanningSession(fake.client(), userId, sessionId, dependencies());
-    expect(detail.status).toBe('approved'); expect(fake.rpcCalls[0]).toEqual({ name: 'approve_planning_session', args: { p_session_id: sessionId, p_input_hash: hash } });
+    expect(detail.status).toBe('approved'); expect(fake.rpcCalls[0]).toEqual({ name: 'approve_planning_session', args: { p_session_id: sessionId, p_input_hash: hash, p_blocks_revision: 1 } });
   });
   it('hash staleではRPCを呼ばずdraftを維持', async () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null });
@@ -113,6 +113,14 @@ describe('planning server runtime workflows', () => {
   });
   it.each(['approved', 'rejected', 'superseded'] as const)('%sは再承認不可', async (status) => { const fake = new FakeSupabase(); queueGet(fake, sessionRow(status)); await expect(approvePlanningSession(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_NOT_DRAFT' }); expect(fake.rpcCalls).toHaveLength(0); });
   it('RPC競合をPLAN_NOT_DRAFTへ変換', async () => { const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: 'NOT_UPDATED', error: null }); await expect(approvePlanningSession(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_NOT_DRAFT' }); });
+  it('blocks取得中のrevision変化はRPC前にPLAN_STALE', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: { ...sessionRow(), blocks_revision: 2 }, error: null });
+    await expect(approvePlanningSession(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_STALE', message: '計画案が変更されています。最新の計画案を作成してください。' }); expect(fake.rpcCalls).toHaveLength(0);
+  });
+  it('検証後のrevision競合をBLOCKS_CHANGEDから安全なPLAN_STALEへ変換', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: 'BLOCKS_CHANGED', error: null });
+    await expect(approvePlanningSession(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_STALE', status: 409 }); expect(fake.rpcCalls[0]?.args).toMatchObject({ p_blocks_revision: 1 });
+  });
   it('正常却下しRPC競合とapproved却下を拒否', async () => {
     const good = new FakeSupabase(); queueGet(good, sessionRow()); good.queueRpc({ data: 'REJECTED', error: null }); queueGet(good, sessionRow('rejected')); expect((await rejectPlanningSession(good.client(), userId, sessionId)).status).toBe('rejected');
     const race = new FakeSupabase(); queueGet(race, sessionRow()); race.queueRpc({ data: 'NOT_UPDATED', error: null }); await expect(rejectPlanningSession(race.client(), userId, sessionId)).rejects.toMatchObject({ code: 'PLAN_NOT_DRAFT' });

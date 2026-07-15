@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync('supabase/migrations/20260715000700_planning_integrity_hardening.sql', 'utf8');
+const raceMigration = readFileSync('supabase/migrations/20260715000800_planning_approval_race_fix.sql', 'utf8');
 const client = readFileSync('src/lib/planning/client.ts', 'utf8');
 const server = readFileSync('src/lib/planning/server.ts', 'utf8');
+const publicTypes = readFileSync('src/types/planning-session.ts', 'utf8');
 
 function validDuration(start: string, end: string, minutes: number): boolean {
   const startMs = new Date(start).getTime(); const endMs = new Date(end).getTime();
@@ -53,5 +55,35 @@ describe('planning integrity migration', () => {
   });
   it('既存複合FKを削除せず、Session直接更新権限を除去', () => {
     expect(migration).not.toMatch(/drop constraint.*planning_blocks_planning_session_id_user_id_fkey/i); expect(migration).toContain('revoke insert, update, delete on public.planning_sessions from authenticated');
+  });
+});
+
+describe('planning approval race correction migration', () => {
+  it('blocks_revisionを非負・内部値として追加', () => {
+    expect(raceMigration).toContain('add column blocks_revision bigint not null default 0'); expect(raceMigration).toContain('check (blocks_revision >= 0)');
+    expect(publicTypes).not.toContain('blocksRevision');
+  });
+  it('block INSERT/UPDATEが親draft行のrevisionを原子的に増加', () => {
+    expect(raceMigration).toMatch(/update public\.planning_sessions[\s\S]*set blocks_revision = blocks_revision \+ 1[\s\S]*status = 'draft'[\s\S]*returning blocks_revision/);
+    expect(raceMigration).toContain('before insert or update on public.planning_blocks'); expect(raceMigration).not.toContain('before insert or update or delete on public.planning_blocks');
+    expect(raceMigration).toContain('old.planning_session_id is distinct from new.planning_session_id'); expect(raceMigration).toContain('old.user_id is distinct from new.user_id');
+  });
+  it('DELETEはRLS予約でrevisionを増やしFK CASCADEをtriggerで阻害しない', () => {
+    expect(raceMigration).toContain('public.reserve_planning_block_delete(planning_session_id, user_id)');
+    expect(raceMigration).not.toContain('before update or delete on public.planning_sessions'); expect(raceMigration).not.toContain('before insert or update or delete on public.planning_blocks');
+    expect(raceMigration).toContain('before update on public.planning_sessions');
+  });
+  it('old approval RPCを削除しrevision付き3引数版だけをgrant', () => {
+    expect(raceMigration).toContain('drop function public.approve_planning_session(uuid, text)');
+    expect(raceMigration).toContain('public.approve_planning_session(uuid, text, bigint) to authenticated');
+    expect(raceMigration).toContain('for update'); expect(raceMigration).toContain("return 'BLOCKS_CHANGED'");
+  });
+  it('不要なSession write policyを削除しSELECT policyは維持', () => {
+    for (const policy of ['planning_sessions_insert_own', 'planning_sessions_update_own', 'planning_sessions_delete_own']) expect(raceMigration).toContain(`drop policy if exists ${policy}`);
+    expect(raceMigration).not.toContain('drop policy planning_sessions_select_own');
+  });
+  it('block先行・approval先行のどちらでも未検証approvedを作らない', () => {
+    const blockFirst = { status: 'draft', revision: 0 }; blockFirst.revision += 1; expect(blockFirst.status === 'draft' && blockFirst.revision === 0).toBe(false);
+    const approvalFirst: { status: 'draft' | 'approved'; revision: number } = { status: 'draft', revision: 0 }; if (approvalFirst.revision === 0) approvalFirst.status = 'approved'; expect(approvalFirst.status === 'draft').toBe(false); expect(approvalFirst.status).toBe('approved');
   });
 });

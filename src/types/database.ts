@@ -88,6 +88,7 @@ export type PlanningSessionRow = {
   warning_codes: string[]; result_summary: Json; created_at: string; updated_at: string;
   approved_at: string | null; rejected_at: string | null;
   idempotency_key: string | null;
+  blocks_revision: number;
 }
 
 export type PlanningBlockRow = {
@@ -115,7 +116,7 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
-      approve_planning_session: { Args: { p_session_id: string; p_input_hash: string }; Returns: string };
+      approve_planning_session: { Args: { p_session_id: string; p_input_hash: string; p_blocks_revision: number }; Returns: string };
       reject_planning_session: { Args: { p_session_id: string }; Returns: string };
       reserve_ai_advice_request: { Args: Record<never, never>; Returns: boolean };
       create_planning_session: { Args: { p_idempotency_key: string | null; p_window_start: string; p_window_end: string; p_input_now: string; p_input_hash: string; p_engine_version: string; p_warning_codes: string[]; p_result_summary: Json; p_blocks: Json }; Returns: string };
