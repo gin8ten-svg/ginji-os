@@ -41,7 +41,7 @@ describe('safe API responses', () => {
 });
 
 describe('AI-ready advisor', () => {
-  const advisorInput = { taskIds: ['a'], routineIds: [] as string[], currentDeterministicOrdering: ['a'], unscheduledReasons: [], aggregate: { busyMinutes: 0, freeMinutes: 60, blockCount: 1 } };
+  const advisorInput = { candidates: [{ alias: 'a', sourceType: 'task' as const, priority: 3, deterministicRank: 1, unscheduledReasonCode: null }], deterministicOrdering: ['a'], aggregate: { planningDays: 7, busyMinutesByDay: [], freeMinutesByDay: [], maximumContinuousFreeMinutes: 60, scheduledCount: 1, unscheduledCount: 0 } };
   it('未知IDと未知IDの説明を破棄する', () => expect(sanitizeAdvice(advisorInput, { orderedSourceIds: ['a', 'unknown'], explanationBySourceId: { a: 'ok', unknown: 'no' }, globalSummary: '', warnings: [] })).toMatchObject({ orderedSourceIds: ['a'], explanationBySourceId: { a: 'ok' } }));
   it('no-op advisorは承認状態を生成せず決定論的順序だけ返す', async () => expect((await new DeterministicPlanningAdvisor().advise(advisorInput)).orderedSourceIds).toEqual(['a']));
 });

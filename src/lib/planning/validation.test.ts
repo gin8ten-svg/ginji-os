@@ -7,11 +7,13 @@ vi.mock('@/lib/planning/server', () => ({
   getPlanningSession: vi.fn(),
   approvePlanningSession: vi.fn(),
   rejectPlanningSession: vi.fn(),
+  createAdvisedPlanningSession: vi.fn(),
 }));
 
 import { GET } from '@/app/api/planning/sessions/[id]/route';
 import { POST as approve } from '@/app/api/planning/sessions/[id]/approve/route';
 import { POST as reject } from '@/app/api/planning/sessions/[id]/reject/route';
+import { POST as advice } from '@/app/api/planning/sessions/[id]/advice/route';
 
 describe('planning session UUID validation', () => {
   it('標準UUIDを受け入れる', () => expect(() => assertPlanningSessionId('11111111-1111-4111-8111-111111111111')).not.toThrow());
@@ -23,6 +25,7 @@ describe('planning session UUID validation', () => {
     ['GET', GET],
     ['approve', approve],
     ['reject', reject],
+    ['advice', advice],
   ])('%s routeは不正UUIDをDB・認証へ渡さない', async (_name, handler) => {
     authenticatedPlanningClient.mockClear();
     const response = await handler(new Request('http://localhost/api/planning/sessions/bad'), { params: Promise.resolve({ id: 'bad' }) });
