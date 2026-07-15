@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CalendarClientError } from '@/lib/calendar/client';
-import { PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
+import { PlanningIdempotencyKey, PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
 import { createPlanningWindow } from '@/lib/planner/engine';
 
 const window = createPlanningWindow(new Date('2026-07-15T00:00:00.000Z'));
@@ -34,5 +34,9 @@ describe('Planning request coordination', () => {
   it('abortされたrequestをcurrentにせずerror反映を防ぐ', () => {
     const coordinator = new PlanningRequestCoordinator(); const request = coordinator.begin(); coordinator.abort();
     expect(request.signal.aborted).toBe(true); expect(coordinator.isCurrent(request.generation)).toBe(false);
+  });
+  it('失敗後のretryは同じkey、成功後の明示再計算は新しいkeyを使う', () => {
+    const values = ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']; let index = 0; const keys = new PlanningIdempotencyKey(() => values[index++]);
+    const first = keys.forRetryableOperation(); expect(keys.forRetryableOperation()).toBe(first); keys.complete(); expect(keys.forRetryableOperation()).toBe(values[1]);
   });
 });

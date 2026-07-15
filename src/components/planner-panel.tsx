@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getCalendarConnection, getCalendarEvents } from '@/lib/calendar/client';
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
-import { PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
+import { PlanningIdempotencyKey, PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
 import { adviseCloudPlanningSession, approveCloudPlanningSession, createCloudPlanningSession, getCloudPlanningSession, listCloudPlanningSessions, PlanningClientError, rejectCloudPlanningSession } from '@/lib/planning/client';
 import { approvalModalOpenAfterResult, canCloseApprovalModal } from '@/lib/planning/approval-ui';
 import { tokyoDateKey } from '@/lib/date-time';
@@ -27,6 +27,7 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const coordinator = useRef(new PlanningRequestCoordinator());
+  const planningKey = useRef(new PlanningIdempotencyKey());
 
   useEffect(() => {
     const activeCoordinator = coordinator.current;
@@ -54,13 +55,13 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
     setLoading(true); setError(null); setStale(false);
     try {
       let next: PlanningSessionDetail;
-      if (isAuthenticated) next = await createCloudPlanningSession(request.signal);
+      if (isAuthenticated) next = await createCloudPlanningSession(planningKey.current.forRetryableOperation(), request.signal);
       else {
         const now = new Date(); const window = createPlanningWindow(now);
         const calendar = await resolvePlanningCalendarInput(false, window, request.signal, { getConnection: getCalendarConnection, getEvents: getCalendarEvents });
         next = localDetail({ ...buildPlanningResult({ now, events: calendar.events, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions }), warnings: calendar.warnings });
       }
-      if (coordinator.current.isCurrent(request.generation)) setSession(next);
+      if (coordinator.current.isCurrent(request.generation)) { setSession(next); planningKey.current.complete(); }
     } catch (cause) {
       if (coordinator.current.isCurrent(request.generation) && !request.signal.aborted) setError(cause instanceof Error ? cause.message : '計画案を作成できませんでした。');
     } finally { if (coordinator.current.isCurrent(request.generation)) setLoading(false); coordinator.current.finish(request.generation); }
@@ -111,6 +112,7 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="期間" value={`${fullDate(session.windowStart)}〜`} /><Metric label="配置" value={`${session.blocks.length}件`} /><Metric label="合計予定" value={`${minutes}分`} /><Metric label="未配置" value={`${session.unscheduledTasks.length + session.unscheduledRoutines.length}件`} /></div>
       {session.status === 'draft' && !stale ? <div className="flex flex-wrap gap-2">{isAuthenticated ? <button type="button" disabled={loading} onClick={() => void consultAI()} className="min-h-11 rounded-full bg-indigo-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? 'AIに相談中…' : 'AIに改善案を相談'}</button> : null}<button type="button" disabled={loading} onClick={() => setConfirming(true)} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">計画案を承認</button><button type="button" disabled={loading} onClick={() => void reject()} className="min-h-11 rounded-full bg-rose-50 px-4 font-semibold text-rose-700 disabled:opacity-50">却下</button></div> : null}
       {session.approvedAt ? <p className="text-sm text-emerald-800">承認日時: {fullDate(session.approvedAt)}。Google Calendarは未書き込みです。</p> : null}
+      {session.status === 'approved' ? <p className="text-sm font-medium text-emerald-800">承認済み計画は変更されません。再計算すると新しい下書きを作成します。</p> : null}
       <div className="grid gap-3 lg:grid-cols-2">{Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([date, blocks]) => <section key={date} className="rounded-2xl border border-slate-200 p-3"><h4 className="font-semibold">{date}</h4><div className="mt-2 space-y-2">{blocks.map((block) => <Block key={block.id} block={block} />)}</div></section>)}</div>
       {session.unscheduledTasks.length ? <section className="rounded-2xl bg-amber-50 p-4"><h4 className="font-semibold">配置できなかったタスク</h4>{session.unscheduledTasks.map((item) => <p key={item.taskId} className="mt-2 text-sm">{item.title} — {item.reason}</p>)}</section> : null}
     </div> : null}

@@ -40,3 +40,10 @@ export class PlanningRequestCoordinator {
   finish(generation: number): void { if (generation === this.generation) this.controller = null; }
   abort(): void { this.controller?.abort(); this.controller = null; this.generation += 1; }
 }
+
+export class PlanningIdempotencyKey {
+  private current: string | null = null;
+  constructor(private readonly createUuid: () => string = () => crypto.randomUUID()) {}
+  forRetryableOperation(): string { this.current ??= this.createUuid(); return this.current; }
+  complete(): void { this.current = null; }
+}
