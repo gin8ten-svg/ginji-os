@@ -58,7 +58,9 @@ export async function currentPlanningInput(client: SupabaseClient<Database>, use
 function blockInsert(sessionId: string, userId: string, block: ProposedTimeBlock) {
   const sourceId = block.taskId ?? block.routineId;
   if (!sourceId) throw new PlanningApiError('PLAN_INVALID', '計画ブロックの参照先が不正です。', 422);
-  return { planning_session_id: sessionId, user_id: userId, source_type: block.source, source_entity_id: sourceId, title: block.title, start_at: block.start, end_at: block.end, block_index: block.splitIndex, duration_minutes: Math.round((new Date(block.end).getTime() - new Date(block.start).getTime()) / 60_000), metadata: {} };
+  const duration = (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60_000;
+  if (!Number.isInteger(duration) || duration <= 0) throw new PlanningApiError('PLAN_INVALID', '計画ブロックは分単位である必要があります。', 422);
+  return { planning_session_id: sessionId, user_id: userId, source_type: block.source, source_entity_id: sourceId, title: block.title, start_at: block.start, end_at: block.end, block_index: block.splitIndex, duration_minutes: duration, metadata: {} };
 }
 
 function resultSummary(result: PlanningResult, advice: PlanningAdviceView | null = null): Json {
@@ -79,19 +81,21 @@ function parseAdviceView(value: Json | undefined): PlanningAdviceView | null {
   return { advisorVersion: item.advisorVersion, model: item.model, globalSummary: item.globalSummary, warnings: item.warnings as string[], orderedSources };
 }
 
-async function persistPlanningSession(client: SupabaseClient<Database>, userId: string, input: PlanningInput, result: PlanningResult, options: { inputNow: Date; engineVersion: string; warningCodes: string[]; advice?: PlanningAdviceView | null }): Promise<PlanningSessionDetail> {
-  const { data: session, error } = await client.from('planning_sessions').insert({ user_id: userId, status: 'draft', window_start: result.window.start, window_end: result.window.end, input_now: options.inputNow.toISOString(), input_hash: input.hash, engine_version: options.engineVersion, warning_codes: options.warningCodes, result_summary: resultSummary(result, options.advice) }).select('*').eq('user_id', userId).single();
-  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を保存できませんでした。', 500);
-  const values = result.proposedBlocks.map((block) => blockInsert(session.id, userId, block));
-  if (values.length) { const { error: blockError } = await client.from('planning_blocks').insert(values); if (blockError) { await client.from('planning_sessions').delete().eq('id', session.id).eq('user_id', userId); throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を保存できませんでした。', 500); } }
-  return detailFromRows(session, result.proposedBlocks.map((block, index) => ({ ...blockInsert(session.id, userId, block), id: `response-${index}`, created_at: session.created_at } as PlanningBlockRow)));
+async function persistPlanningSession(client: SupabaseClient<Database>, userId: string, input: PlanningInput, result: PlanningResult, options: { inputNow: Date; engineVersion: string; warningCodes: string[]; advice?: PlanningAdviceView | null; idempotencyKey?: string | null }): Promise<PlanningSessionDetail> {
+  const blocks = result.proposedBlocks.map((block) => { const value = blockInsert('pending', userId, block); return { source_type: value.source_type, source_entity_id: value.source_entity_id, title: value.title, start_at: value.start_at, end_at: value.end_at, block_index: value.block_index, duration_minutes: value.duration_minutes, metadata: value.metadata }; });
+  const { data: sessionId, error } = await client.rpc('create_planning_session', { p_idempotency_key: options.idempotencyKey ?? null, p_window_start: result.window.start, p_window_end: result.window.end, p_input_now: options.inputNow.toISOString(), p_input_hash: input.hash, p_engine_version: options.engineVersion, p_warning_codes: options.warningCodes, p_result_summary: resultSummary(result, options.advice), p_blocks: blocks as unknown as Json });
+  if (error || !sessionId) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を保存できませんでした。', 500);
+  return getPlanningSession(client, userId, sessionId);
 }
 
-export async function createPlanningSession(client: SupabaseClient<Database>, userId: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
+export async function createPlanningSession(client: SupabaseClient<Database>, userId: string, idempotencyKey: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
   const deps = { ...defaultDependencies, ...dependencies };
+  const { data: existing, error } = await client.from('planning_sessions').select('id').eq('user_id', userId).eq('idempotency_key', idempotencyKey).maybeSingle();
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を確認できませんでした。', 500);
+  if (existing) return getPlanningSession(client, userId, existing.id);
   const now = deps.now();
   const input = await deps.loadCurrentInput(client, userId, now);
-  return persistPlanningSession(client, userId, input, input.result, { inputNow: now, engineVersion: PLANNING_ENGINE_VERSION, warningCodes: input.warningCodes });
+  return persistPlanningSession(client, userId, input, input.result, { inputNow: now, engineVersion: PLANNING_ENGINE_VERSION, warningCodes: input.warningCodes, idempotencyKey });
 }
 
 function summaryData(value: Json): { unscheduledTasks: UnscheduledTask[]; unscheduledRoutines: UnscheduledRoutine[]; advice: PlanningAdviceView | null } {

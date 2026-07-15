@@ -106,6 +106,14 @@ Supabase Authのユーザーに紐づく設定。
 | output_snapshot | jsonb |
 | created_at | timestamptz |
 | approved_at | timestamptz |
+| idempotency_key | uuid nullable、user単位partial unique |
+
+terminal status（approved/rejected/superseded）の行はUPDATE・DELETE不能。snapshot列はdraft中も変更せず、
+status遷移だけを専用RPCで行う。生成は `create_planning_session` がblocksと同一transactionで保存する。
+
+## planning_blocks
+
+親planning_sessionがdraftの間だけ変更可能。start/endは分境界、正区間で、`duration_minutes` は実時間差と完全一致する。
 
 ## time_blocks
 

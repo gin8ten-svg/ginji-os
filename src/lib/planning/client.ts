@@ -14,7 +14,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export const createCloudPlanningSession = (signal?: AbortSignal) => request<PlanningSessionDetail>('/api/planning/sessions', { method: 'POST', signal });
+export const createCloudPlanningSession = (idempotencyKey: string, signal?: AbortSignal) => request<PlanningSessionDetail>('/api/planning/sessions', { method: 'POST', signal, headers: { 'Idempotency-Key': idempotencyKey } });
 export const listCloudPlanningSessions = (signal?: AbortSignal) => request<{ sessions: PlanningSessionSummary[] }>('/api/planning/sessions', { signal });
 export const getCloudPlanningSession = (id: string, signal?: AbortSignal) => request<PlanningSessionDetail>(`/api/planning/sessions/${encodeURIComponent(id)}`, { signal });
 export const approveCloudPlanningSession = (id: string) => request<PlanningSessionDetail>(`/api/planning/sessions/${encodeURIComponent(id)}/approve`, { method: 'POST' });

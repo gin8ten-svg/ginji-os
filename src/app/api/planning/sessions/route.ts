@@ -1,5 +1,6 @@
 import { authenticatedPlanningClient, createPlanningSession, listPlanningSessions } from '@/lib/planning/server';
 import { planningError, planningJson } from '@/lib/planning/responses';
+import { assertPlanningIdempotencyKey } from '@/lib/planning/validation';
 
 export async function GET() {
   try {
@@ -8,9 +9,11 @@ export async function GET() {
   } catch (error) { return planningError(error); }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const idempotencyKey = request.headers.get('Idempotency-Key');
+    assertPlanningIdempotencyKey(idempotencyKey);
     const { client, user } = await authenticatedPlanningClient();
-    return planningJson(await createPlanningSession(client, user.id), 201);
+    return planningJson(await createPlanningSession(client, user.id, idempotencyKey), 201);
   } catch (error) { return planningError(error); }
 }
