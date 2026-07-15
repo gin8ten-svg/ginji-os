@@ -137,6 +137,13 @@ Supabase Authのユーザーに紐づく設定。
 | after_data | jsonb |
 | created_at | timestamptz |
 
+## ai_advice_rate_limits
+
+AI相談の同一ユーザー並列実行をDB時刻で原子的に抑止するサーバー専用テーブル。`user_id` は
+`auth.users(id)` を参照する主キーで、`reserved_at` と `updated_at` を保持する。RLSを有効にしたうえで
+`anon` / `authenticated` の直接テーブル権限を剥奪し、引数なしの `reserve_ai_advice_request()` だけを
+`authenticated` が実行できる。関数は内部の `auth.uid()` と単一UPSERTを使い、30秒境界を判定する。
+
 ## RLS policy principle
 
 すべてのユーザー所有テーブル（routines、routine_completionsを含む）で、`auth.uid() = user_id` の行だけをSELECT、INSERT、UPDATE、DELETE可能にする。

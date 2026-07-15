@@ -95,6 +95,10 @@ export type PlanningBlockRow = {
   duration_minutes: number; metadata: Json; created_at: string;
 }
 
+export type AiAdviceRateLimitRow = {
+  user_id: string; reserved_at: string; updated_at: string;
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -106,11 +110,13 @@ export interface Database {
       calendar_connections: Table<CalendarConnectionRow, Partial<CalendarConnectionRow> & Pick<CalendarConnectionRow, 'user_id' | 'encrypted_refresh_token'>>;
       planning_sessions: Table<PlanningSessionRow, Partial<PlanningSessionRow> & Pick<PlanningSessionRow, 'user_id' | 'window_start' | 'window_end' | 'input_now' | 'input_hash' | 'engine_version'>>;
       planning_blocks: Table<PlanningBlockRow, Partial<PlanningBlockRow> & Pick<PlanningBlockRow, 'planning_session_id' | 'user_id' | 'source_type' | 'source_entity_id' | 'title' | 'start_at' | 'end_at' | 'duration_minutes'>>;
+      ai_advice_rate_limits: Table<AiAdviceRateLimitRow, Pick<AiAdviceRateLimitRow, 'user_id' | 'reserved_at'>>;
     };
     Views: Record<string, never>;
     Functions: {
       approve_planning_session: { Args: { p_session_id: string; p_input_hash: string }; Returns: string };
       reject_planning_session: { Args: { p_session_id: string }; Returns: string };
+      reserve_ai_advice_request: { Args: Record<never, never>; Returns: boolean };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

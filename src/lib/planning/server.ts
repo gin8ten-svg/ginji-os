@@ -110,7 +110,7 @@ export function detailFromRows(session: PlanningSessionRow, blocks: PlanningBloc
   return { sessionId: session.id, status: session.status, windowStart: session.window_start, windowEnd: session.window_end, blocks: blocks.map(proposedFromRow), ...summary, warnings: session.warning_codes.map((code) => warningText[code] ?? code), inputHash: session.input_hash, engineVersion: session.engine_version, createdAt: session.created_at, approvedAt: session.approved_at, rejectedAt: session.rejected_at };
 }
 
-interface AdviceDependencies extends PlanningServerDependencies { advisor: () => PlanningAdvisor & { model?: string }; }
+interface AdviceDependencies extends PlanningServerDependencies { advisor: () => PlanningAdvisor & { model?: string }; signal?: AbortSignal; }
 const defaultAdviceDependencies: AdviceDependencies = { ...defaultDependencies, advisor: () => new OpenAIPlanningAdvisor() };
 
 export async function createAdvisedPlanningSession(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<AdviceDependencies> = {}): Promise<PlanningSessionDetail> {
@@ -120,15 +120,17 @@ export async function createAdvisedPlanningSession(client: SupabaseClient<Databa
   const { data: row, error: rowError } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
   if (rowError) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を取得できませんでした。', 500);
   if (!row) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
-  const { data: recent, error: recentError } = await client.from('planning_sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20);
-  if (recentError) throw new PlanningApiError('PERSISTENCE_FAILED', 'AI利用状況を確認できませんでした。', 500);
-  if (recent.some((item) => item.engine_version.includes(AI_ADVISOR_VERSION) && now.getTime() - new Date(item.created_at).getTime() < 30_000)) throw new PlanningApiError('AI_RATE_LIMITED', 'AIへの再相談は30秒待ってから実行してください。', 429);
   const input = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (input.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
   if (!validateStoredPlan(saved.blocks, input.result, input.store)) throw new PlanningApiError('PLAN_INVALID', '元の計画案を再検証できませんでした。', 422);
   if (planningFreshnessReason(row, input.result.proposedBlocks, now)) throw staleTimeError();
   let aliases; try { aliases = buildPlanningAdviceInput(input.store, input.result, new Date(row.input_now)); } catch (error) { if (error instanceof Error && error.message === 'AI_INPUT_TOO_LARGE') throw new PlanningApiError('AI_INPUT_TOO_LARGE', 'AIへ相談できる項目数は100件までです。', 422); throw error; }
-  const advisor = deps.advisor(); const raw = await advisor.advise(aliases.input);
+  if (deps.signal?.aborted) throw new PlanningApiError('AI_REQUEST_CANCELLED', 'AI相談をキャンセルしました。', 499);
+  const { data: reserved, error: reservationError } = await client.rpc('reserve_ai_advice_request');
+  if (reservationError) throw new PlanningApiError('PERSISTENCE_FAILED', 'AI相談を開始できませんでした。', 500);
+  if (!reserved) throw new PlanningApiError('AI_RATE_LIMITED', 'AIへの再相談は30秒待ってから実行してください。', 429);
+  if (deps.signal?.aborted) throw new PlanningApiError('AI_REQUEST_CANCELLED', 'AI相談をキャンセルしました。', 499);
+  const advisor = deps.advisor(); const raw = await advisor.advise(aliases.input, deps.signal);
   let advice; try { advice = sanitizeAdvice(aliases.input, raw); } catch { throw new PlanningApiError('AI_INVALID_RESPONSE', 'AIから有効な改善案を取得できませんでした。', 502); }
   const ordering = orderingSourceIds(advice, aliases);
   const advisedResult = buildPlanningResult({ now: new Date(row.input_now), events: input.events, tasks: input.store.tasks, routines: input.store.routines, completions: input.store.routineCompletions, orderingOverride: ordering });

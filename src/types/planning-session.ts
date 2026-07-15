@@ -1,7 +1,7 @@
 import type { ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
 
 export type PlanningSessionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
-export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE';
+export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
 
 export interface PlanningAdviceView {
   advisorVersion: string; model: string; globalSummary: string; warnings: string[];
@@ -33,4 +33,4 @@ export interface PlanningAdviceInput {
   aggregate: { planningDays: number; busyMinutesByDay: number[]; freeMinutesByDay: number[]; maximumContinuousFreeMinutes: number; scheduledCount: number; unscheduledCount: number };
 }
 export interface PlanningAdvice { orderedSourceIds: string[]; explanationBySourceId: Record<string, string>; globalSummary: string; warnings: string[] }
-export interface PlanningAdvisor { advise(input: PlanningAdviceInput): Promise<PlanningAdvice> }
+export interface PlanningAdvisor { advise(input: PlanningAdviceInput, signal?: AbortSignal): Promise<PlanningAdvice> }

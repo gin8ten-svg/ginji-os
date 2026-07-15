@@ -59,7 +59,8 @@
 - [x] Planning Session保存・stale検出・明示承認/却下
 - [x] AI-ready助言interface（外部providerなし）
 - [ ] Planning Session生成のidempotency（同一hash draft再利用・重複request排除）
-- [ ] AI Adviceの分散rate limitと利用量監視
+- [x] AI AdviceのDB原子rate limit
+- [ ] AI Adviceの利用量監視
 - [ ] 手動編集
 - [ ] 再生成
 
