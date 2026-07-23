@@ -73,8 +73,6 @@ export type RoutineCompletionRow = {
 
 export type CalendarConnectionRow = {
   user_id: string;
-  encrypted_refresh_token: string;
-  token_format_version: number;
   granted_scopes: string[];
   selected_calendar_ids: string[];
   needs_reconnect: boolean;
@@ -111,7 +109,7 @@ export interface Database {
       tasks: Table<TaskRow, Partial<TaskRow> & Pick<TaskRow, 'user_id' | 'title' | 'priority' | 'estimated_minutes'>>;
       routines: Table<RoutineRow, Partial<RoutineRow> & Pick<RoutineRow, 'user_id' | 'name' | 'frequency_type' | 'estimated_minutes' | 'priority'>>;
       routine_completions: Table<RoutineCompletionRow, Partial<RoutineCompletionRow> & Pick<RoutineCompletionRow, 'user_id' | 'routine_id' | 'target_date'>>;
-      calendar_connections: Table<CalendarConnectionRow, Partial<CalendarConnectionRow> & Pick<CalendarConnectionRow, 'user_id' | 'encrypted_refresh_token'>>;
+      calendar_connections: Table<CalendarConnectionRow, Partial<CalendarConnectionRow> & Pick<CalendarConnectionRow, 'user_id'>>;
       planning_sessions: Table<PlanningSessionRow, Partial<PlanningSessionRow> & Pick<PlanningSessionRow, 'user_id' | 'window_start' | 'window_end' | 'input_now' | 'input_hash' | 'engine_version'>>;
       planning_blocks: Table<PlanningBlockRow, Partial<PlanningBlockRow> & Pick<PlanningBlockRow, 'planning_session_id' | 'user_id' | 'source_type' | 'source_entity_id' | 'title' | 'start_at' | 'end_at' | 'duration_minutes'>>;
       ai_advice_rate_limits: Table<AiAdviceRateLimitRow, Pick<AiAdviceRateLimitRow, 'user_id' | 'reserved_at'>>;
@@ -124,6 +122,8 @@ export interface Database {
       reserve_ai_advice_request: { Args: Record<never, never>; Returns: boolean };
       create_planning_session: { Args: { p_idempotency_key: string | null; p_window_start: string; p_window_end: string; p_input_now: string; p_input_hash: string; p_engine_version: string; p_warning_codes: string[]; p_result_summary: Json; p_blocks: Json }; Returns: string };
       create_planning_session_v2: { Args: { p_idempotency_key: string | null; p_window_start: string; p_window_end: string; p_input_now: string; p_input_hash: string; p_input_snapshot_version: string; p_input_snapshot: Json; p_engine_version: string; p_warning_codes: string[]; p_result_summary: Json; p_blocks: Json }; Returns: string };
+      save_calendar_connection: { Args: { p_encrypted_refresh_token: string; p_granted_scopes: string[] }; Returns: void };
+      get_calendar_connection_token: { Args: Record<never, never>; Returns: string | null };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

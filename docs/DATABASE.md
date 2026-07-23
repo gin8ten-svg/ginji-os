@@ -84,15 +84,17 @@ Supabase Authのユーザーに紐づく設定。
 
 | Column | Type | Notes |
 |---|---|---|
-| id | uuid | PK |
-| user_id | uuid | |
-| provider | text | google |
-| provider_account_id | text | |
-| access_token_encrypted | text | server only |
-| refresh_token_encrypted | text | server only |
-| token_expires_at | timestamptz | |
-| created_at | timestamptz | |
+| user_id | uuid | PK, auth.users FK |
+| granted_scopes | text[] | |
+| selected_calendar_ids | text[] | |
+| needs_reconnect | boolean | |
+| connected_at | timestamptz | |
 | updated_at | timestamptz | |
+
+暗号化Refresh Tokenは`calendar_connections`に置かず、`calendar_connection_secrets`（`user_id`をPKとしてFK cascade）へ分離する。
+`anon`/`authenticated`へは直接のtable権限を一切付与せず、`save_calendar_connection(p_encrypted_refresh_token, p_granted_scopes)`と
+`get_calendar_connection_token()`のSECURITY DEFINER RPCだけを`authenticated`が実行できる。両RPCとも内部の`auth.uid()`だけで
+対象行を決定し、他ユーザーのTokenへは到達できない。
 
 ## planning_sessions
 
@@ -159,5 +161,4 @@ AI相談の同一ユーザー並列実行をDB時刻で原子的に抑止する�
 
 すべてのユーザー所有テーブル（routines、routine_completionsを含む）で、`auth.uid() = user_id` の行だけをSELECT、INSERT、UPDATE、DELETE可能にする。
 
-`calendar_connections` のトークン列は通常のクライアントクエリで取得させない。
-必要であれば別スキーマまたはサーバー専用テーブルへ分離する。
+暗号化Refresh Tokenは`calendar_connections`から`calendar_connection_secrets`へ分離済みで、通常のクライアントクエリでは取得できない。

@@ -29,7 +29,8 @@ Google Calendar API。
 Calendar権限は通常ログインから分離し、Calendar画面の明示的な接続操作でのみ
 `calendar.events.readonly` と `calendar.calendarlist.readonly` を要求する。Google API呼び出しは
 Route Handlerに限定し、Access Tokenは永続化しない。Refresh TokenはAES-256-GCMで暗号化して
-`calendar_connections` に保存する。外部イベントはDBへ複製せず、クライアントの一時状態だけで扱う。
+`calendar_connection_secrets` へ保存し、`authenticated`への直接table権限は付与せずSECURITY DEFINER RPC経由でのみ
+読み書きする。外部イベントはDBへ複製せず、クライアントの一時状態だけで扱う。
 
 ### AI planning
 

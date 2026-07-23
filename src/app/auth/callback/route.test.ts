@@ -35,7 +35,7 @@ describe('OAuth callback authorization boundary', () => {
     mocks.exchange.mockResolvedValue({ data: { session: { user: { id: 'user-a' }, provider_refresh_token: 'refresh' } }, error: null });
     const state = createCalendarOAuthState('user-a');
     const response = await GET(request('code=calendar&flow=calendar', state));
-    expect(mocks.save).toHaveBeenCalledWith(expect.anything(), 'user-a', 'refresh');
+    expect(mocks.save).toHaveBeenCalledWith(expect.anything(), 'refresh');
     expect(response.headers.get('location')).toBe('https://app.example/calendar');
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('set-cookie')).toContain(`${CALENDAR_OAUTH_COOKIE}=`);

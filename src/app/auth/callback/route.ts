@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
       const userId = data.session?.user.id;
       if (!userId || !verifyCalendarOAuthState(request.cookies.get(CALENDAR_OAUTH_COOKIE)?.value, userId)) return calendarRedirect(request, 'account_mismatch');
       if (!refreshToken) return calendarRedirect(request, 'missing_refresh_token');
-      await saveCalendarConnection(client, userId, refreshToken);
+      await saveCalendarConnection(client, refreshToken);
       const response = withPrivateCache(NextResponse.redirect(new URL(destination, request.url)));
       response.cookies.delete({ name: CALENDAR_OAUTH_COOKIE, path: '/auth/callback' });
       return response;

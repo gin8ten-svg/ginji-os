@@ -12,7 +12,7 @@ export async function DELETE() {
   const context = await authenticatedCalendarContext();
   if (!context.ok) return context.response;
   try {
-    const result = await disconnectCalendarConnection(context.client, context.userId, context.connection?.encrypted_refresh_token);
+    const result = await disconnectCalendarConnection(context.client, context.userId);
     return calendarJson({ disconnected: true, googleRevoked: result.googleRevoked });
   } catch { return calendarJson({ error: 'Google Calendar接続を解除できませんでした。' }, 500); }
 }

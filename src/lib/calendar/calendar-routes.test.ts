@@ -29,7 +29,7 @@ describe('Calendar Route Handler authorization and caching', () => {
 
   it('認証user_idを所有者条件に使い、暗号文を返さない', async () => {
     const filters: unknown[][] = [];
-    const connection = { user_id: 'user-a', encrypted_refresh_token: 'ciphertext-secret', token_format_version: 1, granted_scopes: [], selected_calendar_ids: ['primary'], needs_reconnect: false, connected_at: '2026-07-15T00:00:00.000Z', updated_at: '2026-07-15T00:00:00.000Z' };
+    const connection = { user_id: 'user-a', encrypted_refresh_token: 'ciphertext-secret', granted_scopes: [], selected_calendar_ids: ['primary'], needs_reconnect: false, connected_at: '2026-07-15T00:00:00.000Z', updated_at: '2026-07-15T00:00:00.000Z' };
     mocks.client = {
       auth: { getUser: async () => ({ data: { user: { id: 'user-a' } }, error: null }) },
       from: () => ({ select: () => ({ eq: (...args: unknown[]) => { filters.push(args); return { maybeSingle: async () => ({ data: connection, error: null }) }; } }) }),
