@@ -86,10 +86,12 @@ function consumeSlot(slots: FreeSlot[], index: number, minutes: number): { start
 }
 
 export function comparePlanningTasks(a: Task, b: Task, now: Date): number {
-  const nowMs = now.getTime();
+  const today = tokyoDateKey(now);
   const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
   const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
-  const overdue = Number(bDue < nowMs) - Number(aDue < nowMs);
+  const aOverdue = a.dueAt ? tokyoDateKey(new Date(aDue)) < today : false;
+  const bOverdue = b.dueAt ? tokyoDateKey(new Date(bDue)) < today : false;
+  const overdue = Number(bOverdue) - Number(aOverdue);
   return overdue || aDue - bDue || b.priority - a.priority || b.remainingMinutes - a.remainingMinutes || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
 
@@ -100,9 +102,12 @@ type PlanningCandidate =
 function taskDeadline(task: Task, window: PlanningWindow, now: Date): number {
   if (!task.dueAt) return new Date(window.end).getTime();
   const due = new Date(task.dueAt).getTime();
-  if (due < now.getTime()) return now.getTime();
   const date = tokyoDateKey(new Date(due));
-  return Math.min(due, instant(date, window.workdayEnd), new Date(window.end).getTime());
+  const today = tokyoDateKey(now);
+  if (date < today) return now.getTime();
+  const workdayEnd = instant(date, window.workdayEnd);
+  if (date === today && due <= now.getTime()) return workdayEnd;
+  return Math.min(due, workdayEnd, new Date(window.end).getTime());
 }
 
 export function planningPriorityBand(candidate: { kind: 'task'; dueAt: string | null } | { kind: 'routine'; constrained: boolean }, now: Date): number {
@@ -110,7 +115,7 @@ export function planningPriorityBand(candidate: { kind: 'task'; dueAt: string | 
   if (!candidate.dueAt) return 8;
   const due = new Date(candidate.dueAt).getTime();
   const today = tokyoDateKey(now); const dueDate = tokyoDateKey(new Date(due));
-  if (due < now.getTime()) return 1;
+  if (dueDate < today) return 1;
   if (dueDate === today) return 2;
   if (dueDate === shiftTokyoDate(today, 1)) return 3;
   return due <= instant(shiftTokyoDate(today, 7), DAY_END) ? 5 : 7;
@@ -177,8 +182,8 @@ export function buildPlanningResult(input: { now: Date; events: readonly Externa
     const task = candidate.task;
     let remaining = task.remainingMinutes;
     let splitIndex = 1;
-    const overdue = task.dueAt ? new Date(task.dueAt).getTime() < input.now.getTime() : false;
-    const deadline = overdue ? new Date(window.end).getTime() : candidate.effectiveDeadline;
+    const overdueDate = task.dueAt ? tokyoDateKey(new Date(task.dueAt)) < tokyoDateKey(input.now) : false;
+    const deadline = overdueDate ? new Date(window.end).getTime() : candidate.effectiveDeadline;
     if (!task.splittable) {
       const index = slots.findIndex((slot) => new Date(slot.start).getTime() + remaining * MINUTE <= Math.min(new Date(slot.end).getTime(), deadline));
       if (index >= 0) {
