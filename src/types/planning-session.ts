@@ -1,7 +1,7 @@
 import type { ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
 
 export type PlanningSessionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
-export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
+export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
 
 export interface PlanningAdviceView {
   advisorVersion: string; model: string; globalSummary: string; warnings: string[];
@@ -29,6 +29,20 @@ export interface CalendarEventPreviewItem {
 export interface PlanningCalendarEventPreview {
   sessionId: string; status: 'approved'; windowStart: string; windowEnd: string;
   timeZone: 'Asia/Tokyo'; events: CalendarEventPreviewItem[];
+}
+
+export type CalendarEventWriteStatus = 'created' | 'already_created' | 'failed' | 'in_progress' | 'not_attempted';
+
+export interface PlanningCalendarEventWriteItem {
+  sourceType: 'task' | 'routine'; sourceId: string; title: string;
+  start: string; end: string; blockIndex: number; durationMinutes: number;
+  writeStatus: CalendarEventWriteStatus; errorCode: 'CALENDAR_WRITE_FAILED' | null;
+}
+
+export interface PlanningCalendarWriteResult {
+  sessionId: string; calendarId: string; status: 'completed' | 'partial' | 'failed';
+  createdCount: number; alreadyCreatedCount: number; failedCount: number; inProgressCount: number; notAttemptedCount: number;
+  needsReconnect: boolean; events: PlanningCalendarEventWriteItem[];
 }
 
 export interface PlanningAdviceCandidate {

@@ -1,18 +1,20 @@
-# Google Calendar read-only setup
+# Google Calendar setup
 
-この機能はGoogle Calendarを読み取るだけです。予定の作成・更新・削除は行いません。
+この機能はGoogle Calendarを読み取り、承認済みPlanning Sessionの明示確認後に新しい予定を作成します。
+既存予定の更新・削除は行いません。
 
 ## Google Cloud
 
 1. 既存のGoogle OAuthプロジェクトでGoogle Calendar APIを有効にする。
 2. OAuth同意画面へ次のスコープを追加する。
-   - `https://www.googleapis.com/auth/calendar.events.readonly`
+   - `https://www.googleapis.com/auth/calendar.events`
    - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
 3. アプリがTestingの場合は利用するGoogleアカウントをTest usersへ追加する。
 4. 既存OAuth Web clientのAuthorized redirect URIに、Supabase Auth callback
    `https://wiasmlwvodnbccsmhaeo.supabase.co/auth/v1/callback` が登録済みであることを確認する。
 
 Calendar権限は通常ログインでは要求されません。Calendar画面の「Google Calendarを接続」から追加同意します。
+既存のread-only接続は、予定作成前に再接続して追加scopeへの同意が必要です。
 
 ## Supabase Auth URL Configuration
 

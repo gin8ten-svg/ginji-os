@@ -31,7 +31,7 @@ titles come from the immutable stored snapshot, not client input. A stale plan i
 to replan and approve again. The response is `private, no-store` and does not expose the snapshot, hash, block revision,
 idempotency key, or user ID.
 
-The endpoint is read-only and does not call a Google Calendar write API. No title is sent to Google, OAuth scopes remain
-read-only, and no Calendar write API exists.
-Future write work must independently revalidate rather than trusting preview output, and must add idempotency and audit logs.
+The Preview endpoint remains read-only and does not call a Google Calendar write API. Preview data is not accepted as write
+input. Calendar write is implemented as a separate explicit-confirmation endpoint that independently reruns validation and
+uses block-level idempotency and audit logs; see `docs/GOOGLE_CALENDAR_WRITE.md`.
 OpenAI remains unconfigured and no external AI call is required for this snapshot foundation.

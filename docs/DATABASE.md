@@ -129,15 +129,29 @@ V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、
 | id | uuid | PK |
 | user_id | uuid | |
 | task_id | uuid | nullable |
-| planning_session_id | uuid | nullable |
+| routine_id | uuid | nullable |
+| planning_session_id | uuid | required |
+| planning_block_id | uuid | required、unique |
 | start_at | timestamptz | |
 | end_at | timestamptz | |
 | status | text | proposed/approved/in_progress/completed/skipped |
 | source | text | manual/ai/google |
-| google_event_id | text | nullable |
+| google_calendar_id | text | required |
+| google_event_id | text | required、user/calendar/eventでunique |
+| calendar_write_status | text | writing/succeeded/failed |
+| calendar_write_attempt_token | uuid | writing中だけ保持 |
+| calendar_write_lease_until | timestamptz | writing中だけ保持 |
+| calendar_write_attempt_count | int | 1以上 |
+| calendar_write_error_code | text | failed時だけ保持 |
+| written_at | timestamptz | succeeded時だけ保持 |
 | actual_minutes | int | nullable |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
+
+`planning_block_id, planning_session_id, user_id` の複合FKでPlanning Block所有関係を固定する。1 blockは1つの
+Google Calendar/Event IDだけに対応する。認証ユーザーはown SELECTのみ可能で、mutationはSession行をlockして
+status/hash/revision/Calendarを再確認する `reserve_calendar_event_write` と、attempt tokenを照合して結果とauditを
+同一transactionで確定する `complete_calendar_event_write` だけを使う。
 
 ## audit_logs
 
@@ -151,6 +165,9 @@ V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、
 | before_data | jsonb |
 | after_data | jsonb |
 | created_at | timestamptz |
+
+Calendar書き込みではactionを`calendar_event_write_succeeded`または`calendar_event_write_failed`、entity_typeを
+`time_block`として記録する。RLS下でown SELECTだけを許可し、直接mutationは許可しない。
 
 ## ai_advice_rate_limits
 

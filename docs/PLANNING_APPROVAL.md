@@ -66,20 +66,20 @@ Session/blockのDELETE triggerは設けず、RLS policyにも副作用関数を�
 
 ## AI and Calendar boundary
 
-外部AI providerは任意のAdvice生成だけに限定し、Google Calendar書き込みAPIは存在しない。`PlanningAdvisor` は最小化したID、順序、
+外部AI providerは任意のAdvice生成だけに限定する。Google Calendar書き込みはAIから分離したserver-only APIで行う。`PlanningAdvisor` は最小化したID、順序、
 集計だけを扱い、未知IDを破棄できる。AI助言だけで承認することはできず、決定論的Engineが最終検証者である。
 
 OpenAI Adviceを利用する場合も、元のdeterministic draftは変更せず新しいdraftを作る。承認時にAIを再度
 呼び出さず、保存済みのsanitize済み順序を現在所有するentityだけへ絞り、hard priority bandとEngineで
 再配置して保存blocksと比較する。AI responseや説明だけでapprovedへ遷移しない。
 
-`planning_sessions.status = approved` だけでは、将来のGoogle Calendar書き込み許可として十分ではない。
+`planning_sessions.status = approved` だけでは、Google Calendar書き込み許可として十分ではない。
 書き込みAPIは書き込み直前に、認証ユーザー、Session所有権、approved状態、現在入力、input_hash、実時刻鮮度、
 Planning Engine再実行、保存blocksとのcanonical比較、対象Calendar、ユーザーの最終確認をすべて再検証する。
 approvedだけを条件にGoogle APIを呼ばず、現在のapprove RPCを単独の権限境界として利用しない。
 
-書き込みは別の冪等APIとし、部分成功、再試行、重複防止を監査記録へ残す。現在はwrite scope、Google Event ID、
-書き込み用tableを追加しない。
+書き込みは別の冪等APIとし、決定論的Google Event IDとblock単位の`time_blocks`状態で重複を防ぐ。部分成功は残し、
+失敗分だけを再試行可能にして、成功・失敗を`audit_logs`へ記録する。詳細は `docs/GOOGLE_CALENDAR_WRITE.md` を参照する。
 
 ## Deferred verification
 

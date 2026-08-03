@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { revokeGoogleToken } from '@/lib/calendar/google-api';
 import { decryptRefreshToken, encryptRefreshToken } from '@/lib/calendar/token-crypto';
 import type { Database } from '@/types/database';
-import { GOOGLE_CALENDAR_SCOPES } from '@/types/calendar';
+import { GOOGLE_CALENDAR_SCOPES, hasGoogleCalendarEventWriteScope } from '@/types/calendar';
 import type { CalendarConnectionRow } from '@/types/database';
 import type { CalendarConnectionStatus } from '@/types/calendar';
 
@@ -17,7 +17,7 @@ export async function saveCalendarConnection(client: SupabaseClient<Database>, r
 }
 
 export function publicConnectionStatus(connection: CalendarConnectionRow | null): CalendarConnectionStatus {
-  return { connected: Boolean(connection), connectedAt: connection?.connected_at ?? null, selectedCalendarIds: connection?.selected_calendar_ids ?? [], needsReconnect: connection?.needs_reconnect ?? false };
+  return { connected: Boolean(connection), connectedAt: connection?.connected_at ?? null, selectedCalendarIds: connection?.selected_calendar_ids ?? [], needsReconnect: connection?.needs_reconnect ?? false, canWriteEvents: connection ? hasGoogleCalendarEventWriteScope(connection.granted_scopes) : false };
 }
 
 export async function disconnectCalendarConnection(client: SupabaseClient<Database>, userId: string, fetcher: typeof fetch = fetch): Promise<{ googleRevoked: boolean }> {

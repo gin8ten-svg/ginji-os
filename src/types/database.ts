@@ -101,6 +101,21 @@ export type AiAdviceRateLimitRow = {
   user_id: string; reserved_at: string; updated_at: string;
 }
 
+export type TimeBlockRow = {
+  id: string; user_id: string; task_id: string | null; routine_id: string | null;
+  planning_session_id: string; planning_block_id: string; start_at: string; end_at: string;
+  status: 'proposed' | 'approved' | 'in_progress' | 'completed' | 'skipped'; source: 'manual' | 'ai' | 'google';
+  google_calendar_id: string; google_event_id: string; calendar_write_status: 'writing' | 'succeeded' | 'failed';
+  calendar_write_attempt_token: string | null; calendar_write_lease_until: string | null;
+  calendar_write_attempt_count: number; calendar_write_error_code: string | null; written_at: string | null;
+  actual_minutes: number | null; created_at: string; updated_at: string;
+}
+
+export type AuditLogRow = {
+  id: string; user_id: string; action: 'calendar_event_write_succeeded' | 'calendar_event_write_failed';
+  entity_type: 'time_block'; entity_id: string; before_data: Json | null; after_data: Json | null; created_at: string;
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -113,6 +128,8 @@ export interface Database {
       planning_sessions: Table<PlanningSessionRow, Partial<PlanningSessionRow> & Pick<PlanningSessionRow, 'user_id' | 'window_start' | 'window_end' | 'input_now' | 'input_hash' | 'engine_version'>>;
       planning_blocks: Table<PlanningBlockRow, Partial<PlanningBlockRow> & Pick<PlanningBlockRow, 'planning_session_id' | 'user_id' | 'source_type' | 'source_entity_id' | 'title' | 'start_at' | 'end_at' | 'duration_minutes'>>;
       ai_advice_rate_limits: Table<AiAdviceRateLimitRow, Pick<AiAdviceRateLimitRow, 'user_id' | 'reserved_at'>>;
+      time_blocks: Table<TimeBlockRow, Partial<TimeBlockRow> & Pick<TimeBlockRow, 'user_id' | 'planning_session_id' | 'planning_block_id' | 'start_at' | 'end_at' | 'google_calendar_id' | 'google_event_id' | 'calendar_write_status'>>;
+      audit_logs: Table<AuditLogRow, Partial<AuditLogRow> & Pick<AuditLogRow, 'user_id' | 'action' | 'entity_type' | 'entity_id'>>;
     };
     Views: Record<string, never>;
     Functions: {
@@ -124,6 +141,8 @@ export interface Database {
       create_planning_session_v2: { Args: { p_idempotency_key: string | null; p_window_start: string; p_window_end: string; p_input_now: string; p_input_hash: string; p_input_snapshot_version: string; p_input_snapshot: Json; p_engine_version: string; p_warning_codes: string[]; p_result_summary: Json; p_blocks: Json }; Returns: string };
       save_calendar_connection: { Args: { p_encrypted_refresh_token: string; p_granted_scopes: string[] }; Returns: void };
       get_calendar_connection_token: { Args: Record<never, never>; Returns: string | null };
+      reserve_calendar_event_write: { Args: { p_session_id: string; p_block_id: string; p_input_hash: string; p_blocks_revision: number; p_calendar_id: string; p_google_event_id: string }; Returns: Json };
+      complete_calendar_event_write: { Args: { p_block_id: string; p_attempt_token: string; p_success: boolean; p_error_code: string | null; p_after_data: Json }; Returns: string };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

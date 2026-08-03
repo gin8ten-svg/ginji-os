@@ -27,7 +27,7 @@ Google Calendar API。
 返すレスポンスは `private, no-store` とする。
 
 Calendar権限は通常ログインから分離し、Calendar画面の明示的な接続操作でのみ
-`calendar.events.readonly` と `calendar.calendarlist.readonly` を要求する。Google API呼び出しは
+`calendar.events` と `calendar.calendarlist.readonly` を要求する。Google API呼び出しは
 Route Handlerに限定し、Access Tokenは永続化しない。Refresh TokenはAES-256-GCMで暗号化して
 `calendar_connection_secrets` へ保存し、`authenticated`への直接table権限は付与せずSECURITY DEFINER RPC経由でのみ
 読み書きする。外部イベントはDBへ複製せず、クライアントの一時状態だけで扱う。
@@ -39,8 +39,8 @@ OpenAI API。
 
 AI導入前のPlanning Engineは、正規化済みGoogle予定、Task、Routineだけを入力にする純粋な決定論的層とする。
 Google Tokenやuser_idは入力に含めない。Asia/Tokyoの08:00〜22:00を7日分生成し、固定予定を差し引いた
-空き枠へTaskとRoutineをeffective deadlineで横断的に配置する。結果は確認専用で、外部Calendarへの
-書き込みは行わない。
+空き枠へTaskとRoutineをeffective deadlineで横断的に配置する。計画生成とPreviewはGoogleへ書き込まず、
+承認済みV2 Sessionだけが別の明示確認付きAPIから書き込める。
 
 Planning Sessionはサーバーが現在のTask、Routine、完了履歴、正規化済みbusy区間から生成する。
 `planning_sessions` と所有者を複合外部キーで固定した `planning_blocks` をRLS下へ保存し、承認時には
@@ -78,21 +78,23 @@ AI Planning Adviceはserver-onlyのOpenAI Responses APIアダプターを通し�
 6. AIが優先順位・分割案を返す
 7. サーバーが重複、期限、所要時間を再検証
 8. ユーザーへプレビュー表示
-9. ユーザー承認後にPlanning Sessionを承認済みにする（現在はGoogleカレンダーへ書き込まない）
-10. 書き込み結果と監査履歴を保存
+9. ユーザー承認後にPlanning Sessionを承認済みにする（承認だけではGoogleへ書き込まない）
+10. 別の明示確認後、書き込みAPIが完全再検証してblock単位でGoogle予定を作成する
+11. 書き込み結果と監査履歴を保存する
 
 ## 3. Safety boundaries
 
 AIに直接Google APIの資格情報を渡さない。
 AIは計画案を返すだけで、実際の予定作成はサーバーが検証後に実施する。
 
-Planning Sessionの `approved` はユーザー確認の記録であり、Calendar書き込み権限そのものではない。将来の
+Planning Sessionの `approved` はユーザー確認の記録であり、Calendar書き込み権限そのものではない。
 書き込みAPIは認証・所有権・status・最新入力hash・実時刻鮮度・Engine出力・保存blocks・対象Calendarを
-書き込み直前に再検証し、最終確認とidempotencyを備える。approve RPCだけをGoogle APIの権限境界にしない。
-immutableなapproved snapshotであっても、将来の書き込み直前には現在入力・所有権・Calendar接続を再検証する。
+書き込み直前に再検証し、最終確認とblock単位idempotencyを備える。approve RPCだけをGoogle APIの権限境界にしない。
+immutableなapproved snapshotでも、書き込み直前に現在入力・所有権・Calendar接続を再検証する。
 Google Calendar Event Previewは承認済みV2 Sessionだけを再検証して読み取り専用表示する。保存snapshot・現在hash・
-決定論的Engine出力・保存blocks・実時刻鮮度を確認し、snapshotのcanonical titleを使う。OAuth scopeはread-onlyのままで、
-Google Calendar書き込みAPIは存在しない。
+決定論的Engine出力・保存blocks・実時刻鮮度を確認し、snapshotのcanonical titleを使う。書き込みはPreviewを信用せず
+同じ検証を独立して再実行し、DB予約RPCでstatus/hash/revision/block/対象CalendarをGoogle呼び出し直前にも確認する。
+詳細は `docs/GOOGLE_CALENDAR_WRITE.md` を参照する。
 
 ## 4. Time handling
 
