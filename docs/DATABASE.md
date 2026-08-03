@@ -112,8 +112,10 @@ Supabase Authのユーザーに紐づく設定。
 | input_snapshot_version | text nullable、V2はplanning-input-v2 |
 | input_snapshot | jsonb nullable、server-only canonical input |
 
-terminal status（approved/rejected/superseded）の行はUPDATE・DELETE不能。snapshot列はdraft中も変更せず、
-status遷移だけを専用RPCで行う。生成は `create_planning_session` がblocksと同一transactionで保存する。
+terminal status（approved/rejected/superseded）のsnapshot列とblocksは変更不能。例外的に、新しいSessionの承認RPCだけが
+windowの重複するapprovedを、元のapproved_atを保持してsupersededへ遷移できる。approvedのhalf-open window重複は
+DB排他制約でも禁止する。利用者はSessionを直接UPDATE・DELETEできず、status遷移だけを専用RPCで行う。
+生成は `create_planning_session` がblocksと同一transactionで保存する。
 V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、legacy行はsnapshot列をnullのまま維持する。
 
 ## planning_blocks

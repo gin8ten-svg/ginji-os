@@ -59,7 +59,7 @@
 - [x] Planning Session保存・stale検出・明示承認/却下
 - [x] AI-ready助言interface（外部providerなし）
 - [x] Planning Session生成のIdempotency-Key・原子的保存・重複request排除
-- [x] Planning Input Snapshot V2とtitle整合性基盤（Migration適用待ち）
+- [x] Planning Input Snapshot V2とtitle整合性基盤（Migration適用・動作確認済み、2026/07/31）
 - [x] AI AdviceのDB原子rate limit
 - [ ] AI Adviceの利用量監視
 - [ ] 手動編集

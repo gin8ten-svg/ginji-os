@@ -3,8 +3,9 @@
 ## Lifecycle
 
 サーバーは認証ユーザーの現在データだけを取得し、決定論的Planning Engineを実行して `draft` を保存する。
-ユーザーは下書きを明示的に `approved` または `rejected` にできる。別の下書きを承認すると、残る下書きは
-原子的なDB関数内で `superseded` になる。承認済み計画を暗黙に変更しない。
+ユーザーは下書きを明示的に `approved` または `rejected` にできる。別の下書きを承認すると、残る下書きと、
+新しいSessionのhalf-open window `[window_start, window_end)` に重複する既存の承認済みSessionは、原子的な
+DB関数内で `superseded` になる。重複しない承認済みSessionは変更しない。
 
 未ログイン時は同じEngineを端末内で利用できるが、Planning SessionをSupabaseへ保存しない。Local承認は
 その画面・端末だけの確認状態であり、Cloud Sessionとは別物である。
@@ -44,7 +45,9 @@ snapshot列はdraft中も不変で、API responseには含めない。snapshot�
 
 Session生成RPCはSessionとblocksを単一transactionで保存する。Session snapshotの入力hash、Engine version、期間、
 基準時刻、summary、warning、作成日時、idempotency keyは生成後に変更できない。`draft` から許可するstatus遷移は
-`approved`、`rejected`、`superseded` だけで、terminal SessionはUPDATEできず、authenticated利用者は直接DELETEできない。承認・却下時刻はDB時刻で確定する。
+`approved`、`rejected`、`superseded` だけとする。terminal Sessionのsnapshot fieldは変更できず、唯一の追加遷移として
+承認RPC内の重複window解消時だけ `approved → superseded` を許可する。この遷移でも元の `approved_at` とblocksを保持する。
+authenticated利用者はSessionを直接UPDATE・DELETEできず、承認・却下時刻はDB時刻で確定する。
 
 planning_blocksは親Sessionがdraftの間だけINSERT・UPDATEできる。terminal親のblock追加、削除、時刻、参照先、
 順序、duration、metadata変更はRLSとtriggerの両方で拒否する。start/endは秒・ミリ秒を含まない分境界とし、
