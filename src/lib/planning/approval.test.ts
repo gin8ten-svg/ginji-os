@@ -15,6 +15,7 @@ const store: TaskStore = { version: 1, tasks: [{ id: 'task-a', title: 'A', descr
 
 describe('planning approval constraints', () => {
   it('保存ブロックと決定論的再計算が一致する場合だけ有効', () => expect(validateStoredPlan([block], result(), store)).toBe(true));
+  it('DBのtimestamptz表記が異なっても同じ実時刻なら有効', () => expect(validateStoredPlan([{ ...block, start: '2026-07-15T00:00:00+00:00', end: '2026-07-15T01:00:00+00:00' }], result(), store)).toBe(true));
   it('overlapや時刻改変を再計算差分として拒否', () => expect(validateStoredPlan([{ ...block, end: '2026-07-15T01:30:00.000Z' }], result(), store)).toBe(false));
   it('完了済みTaskを拒否', () => expect(validateStoredPlan([block], result(), { ...store, tasks: [{ ...store.tasks[0], completedAt: '2026-07-15T00:00:00Z' }] })).toBe(false));
   it('期限後・duration超過などengine出力との差分を拒否', () => expect(validateStoredPlan([block], result([{ ...block, end: '2026-07-15T00:30:00.000Z' }]), store)).toBe(false));
