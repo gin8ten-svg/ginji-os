@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
-import { approvePlanningSession, createAdvisedPlanningSession, createPlanningSession, getPlanningSession, planningFreshnessReason, rejectPlanningSession } from '@/lib/planning/server';
+import { approvePlanningSession, createAdvisedPlanningSession, createPlanningSession, getPlanningCalendarEventPreview, getPlanningSession, planningFreshnessReason, rejectPlanningSession } from '@/lib/planning/server';
 import { hashPlanningInputSnapshotV2, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
 import { PlanningApiError } from '@/lib/planning/responses';
 import type { Database, Json, PlanningBlockRow, PlanningSessionRow } from '@/types/database';
@@ -103,6 +103,45 @@ describe('planning server runtime workflows', () => {
   it.each(['approved', 'rejected', 'superseded'] as const)('legacy %s Sessionは読み取りを維持し変更しない', async (status) => {
     const fake = new FakeSupabase(); const legacy = { ...sessionRow(status), input_snapshot_version: null, input_snapshot: null, engine_version: 'deterministic-v1' }; queueGet(fake, legacy);
     expect((await getPlanningSession(fake.client(), userId, sessionId)).status).toBe(status); expect(fake.rpcCalls).toHaveLength(0); expect(fake.calls.some((call) => call.operation !== 'select')).toBe(false);
+  });
+  it('承認済みV2を再検証しsnapshot由来titleだけでCalendar Previewを返す', async () => {
+    const fake = new FakeSupabase();
+    queueGet(fake, sessionRow('approved'), [{ ...blockRow, title: '保存block側の未信頼title' }]);
+    fake.queue('planning_sessions', 'select', { data: { status: 'approved', blocks_revision: 1 }, error: null });
+    const preview = await getPlanningCalendarEventPreview(fake.client(), userId, sessionId, dependencies());
+    expect(preview).toEqual({ sessionId, status: 'approved', windowStart: snapshot.window.start, windowEnd: snapshot.window.end, timeZone: 'Asia/Tokyo', events: [{ sourceType: 'task', sourceId: block.taskId, title: 'Task', start: block.start, end: block.end, blockIndex: 1, durationMinutes: 60 }] });
+    expect(JSON.stringify(preview)).not.toMatch(/input_snapshot|inputSnapshot|input_hash|inputHash|blocks_revision|user_id/);
+    expect(fake.rpcCalls).toHaveLength(0); expect(fake.calls.every((call) => call.operation === 'select')).toBe(true);
+    fake.calls.forEach((call) => expect(call.filters).toContainEqual(['user_id', userId]));
+  });
+  it.each(['draft', 'rejected', 'superseded'] as const)('%s SessionはCalendar Preview対象外', async (status) => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow(status)); let inputCalls = 0;
+    await expect(getPlanningCalendarEventPreview(fake.client(), userId, sessionId, { ...dependencies(), loadCurrentInput: async () => { inputCalls += 1; return dependencies().loadCurrentInput(); } })).rejects.toMatchObject({ code: 'PLAN_NOT_APPROVED', status: 409 });
+    expect(inputCalls).toBe(0); expect(fake.rpcCalls).toHaveLength(0);
+  });
+  it('legacy approved SessionをCalendar Previewで拒否する', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, { ...sessionRow('approved'), input_snapshot_version: null, input_snapshot: null, engine_version: 'deterministic-v1' });
+    await expect(getPlanningCalendarEventPreview(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_STALE', message: expect.stringContaining('承認') });
+    expect(fake.rpcCalls).toHaveLength(0);
+  });
+  it('snapshot改ざん・現在hash差分・blocks差分・freshness切れをCalendar Previewで拒否する', async () => {
+    const changedSnapshot = { ...snapshot, tasks: [{ ...snapshot.tasks[0], title: 'Tampered' }] };
+    const snapshotFake = new FakeSupabase(); queueGet(snapshotFake, { ...sessionRow('approved'), input_snapshot: changedSnapshot as unknown as Json });
+    await expect(getPlanningCalendarEventPreview(snapshotFake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_INVALID' });
+
+    const hashFake = new FakeSupabase(); queueGet(hashFake, sessionRow('approved'));
+    await expect(getPlanningCalendarEventPreview(hashFake.client(), userId, sessionId, dependencies(new Date('2026-07-15T01:00:00Z'), 'b'.repeat(64)))).rejects.toMatchObject({ code: 'PLAN_STALE', message: expect.stringContaining('再度承認') });
+
+    const blocksFake = new FakeSupabase(); queueGet(blocksFake, sessionRow('approved'));
+    await expect(getPlanningCalendarEventPreview(blocksFake.client(), userId, sessionId, dependencies(new Date('2026-07-15T01:00:00Z'), hash, { ...result, proposedBlocks: [] }))).rejects.toMatchObject({ code: 'PLAN_INVALID' });
+
+    const freshnessFake = new FakeSupabase(); queueGet(freshnessFake, sessionRow('approved'));
+    await expect(getPlanningCalendarEventPreview(freshnessFake.client(), userId, sessionId, dependencies(new Date('2026-07-16T00:00:00Z')))).rejects.toMatchObject({ code: 'PLAN_STALE', message: expect.stringContaining('再度承認') });
+  });
+  it('Preview最終確認中にsupersededへ変わったSessionを返さない', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow('approved')); fake.queue('planning_sessions', 'select', { data: { status: 'superseded', blocks_revision: 1 }, error: null });
+    await expect(getPlanningCalendarEventPreview(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_NOT_APPROVED' });
+    expect(fake.rpcCalls).toHaveLength(0);
   });
   it('正常承認しDB hashだけをRPCへ渡す', async () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: 'APPROVED', error: null }); queueGet(fake, sessionRow('approved'));

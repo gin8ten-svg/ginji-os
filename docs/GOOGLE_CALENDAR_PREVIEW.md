@@ -20,13 +20,18 @@ approval transactions, supersedes existing `approved` Sessions whose half-open w
 draft in one transaction. The migration preserves historical blocks and the original `approved_at`, reconciles any
 pre-existing overlap by retaining the newest approval, and adds a partial GiST exclusion constraint as a database-level
 backstop. `src/lib/planning/server.ts` requires no overlap pre-check because it already uses only this atomic RPC; a
-server-side read followed by a write would not close the database race. The migration must be applied and exercised in
-the target environment before Preview is deployed.
+server-side read followed by a write would not close the database race. The migration was applied and exercised in the
+target environment before Preview implementation began.
 
-The future read-only preview will accept only an approved V2 Session, verify the stored snapshot and current input hash, rerun the
-deterministic engine, and compare canonical blocks. Display titles will come from the immutable stored snapshot, not client input.
-A stale plan requires explicit replanning and approval.
+## Implemented read-only Preview
 
-No preview endpoint or UI exists yet. No title is sent to Google, OAuth scopes remain read-only, and no Calendar write API exists.
+`GET /api/planning/sessions/:id/calendar-preview` and the approved-Session Preview UI accept only an approved V2 Session,
+verify the stored snapshot and current input hash, rerun the deterministic engine, and compare canonical blocks. Display
+titles come from the immutable stored snapshot, not client input. A stale plan is rejected with an explicit requirement
+to replan and approve again. The response is `private, no-store` and does not expose the snapshot, hash, block revision,
+idempotency key, or user ID.
+
+The endpoint is read-only and does not call a Google Calendar write API. No title is sent to Google, OAuth scopes remain
+read-only, and no Calendar write API exists.
 Future write work must independently revalidate rather than trusting preview output, and must add idempotency and audit logs.
 OpenAI remains unconfigured and no external AI call is required for this snapshot foundation.

@@ -90,7 +90,9 @@ Planning Sessionの `approved` はユーザー確認の記録であり、Calenda
 書き込みAPIは認証・所有権・status・最新入力hash・実時刻鮮度・Engine出力・保存blocks・対象Calendarを
 書き込み直前に再検証し、最終確認とidempotencyを備える。approve RPCだけをGoogle APIの権限境界にしない。
 immutableなapproved snapshotであっても、将来の書き込み直前には現在入力・所有権・Calendar接続を再検証する。
-Google Calendar Event PreviewはV2 rollout完了まで未実装で、OAuth scopeとGoogleへの送信内容は変更していない。
+Google Calendar Event Previewは承認済みV2 Sessionだけを再検証して読み取り専用表示する。保存snapshot・現在hash・
+決定論的Engine出力・保存blocks・実時刻鮮度を確認し、snapshotのcanonical titleを使う。OAuth scopeはread-onlyのままで、
+Google Calendar書き込みAPIは存在しない。
 
 ## 4. Time handling
 

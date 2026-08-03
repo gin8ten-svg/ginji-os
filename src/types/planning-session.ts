@@ -1,7 +1,7 @@
 import type { ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
 
 export type PlanningSessionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
-export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
+export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
 
 export interface PlanningAdviceView {
   advisorVersion: string; model: string; globalSummary: string; warnings: string[];
@@ -19,6 +19,16 @@ export interface PlanningSessionDetail {
 export interface PlanningSessionSummary {
   sessionId: string; status: PlanningSessionStatus; windowStart: string; windowEnd: string;
   engineVersion: string; warningCodes: string[]; createdAt: string; approvedAt: string | null; blockCount: number;
+}
+
+export interface CalendarEventPreviewItem {
+  sourceType: 'task' | 'routine'; sourceId: string; title: string;
+  start: string; end: string; blockIndex: number; durationMinutes: number;
+}
+
+export interface PlanningCalendarEventPreview {
+  sessionId: string; status: 'approved'; windowStart: string; windowEnd: string;
+  timeZone: 'Asia/Tokyo'; events: CalendarEventPreviewItem[];
 }
 
 export interface PlanningAdviceCandidate {

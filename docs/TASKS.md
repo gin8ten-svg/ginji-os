@@ -68,7 +68,7 @@
 ## Milestone 5 — Calendar write
 
 - [ ] 承認画面
-- [ ] V2 Migration適用・動作確認後にGoogle Calendar Event Previewを実装
+- [x] V2 Migration適用・動作確認後にGoogle Calendar Event Previewを実装
 - [ ] Googleイベント作成
 - [ ] 冪等性
 - [x] approved/rejected/superseded SessionとblockのDB不変化

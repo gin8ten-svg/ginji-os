@@ -11,7 +11,7 @@ import { SupabaseTaskRepository } from '@/lib/supabase-task-repository';
 import { createClient } from '@/lib/supabase/server';
 import type { Database, Json, PlanningBlockRow, PlanningSessionRow } from '@/types/database';
 import type { PlanningResult, ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
-import type { PlanningAdviceView, PlanningAdvisor, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
+import type { CalendarEventPreviewItem, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventPreview, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
 import type { TaskStore } from '@/types/tasks';
 
 const warningText: Record<string, string> = { CALENDAR_NOT_CONNECTED: 'Google Calendar未接続のため、外部予定を反映していません。' };
@@ -121,7 +121,7 @@ export function detailFromRows(session: PlanningSessionRow, blocks: PlanningBloc
 interface AdviceDependencies extends PlanningServerDependencies { advisor: () => PlanningAdvisor & { model?: string }; signal?: AbortSignal; }
 const defaultAdviceDependencies: AdviceDependencies = { ...defaultDependencies, advisor: () => new OpenAIPlanningAdvisor() };
 
-const legacySnapshotError = () => new PlanningApiError('PLAN_STALE', 'この計画案は旧形式です。新しい計画案を作成してください。', 409);
+const legacySnapshotError = () => new PlanningApiError('PLAN_STALE', 'この計画案は旧形式です。新しい計画案を作成し、承認してください。', 409);
 
 export function verifyStoredPlanningSnapshot(row: Pick<PlanningSessionRow, 'input_snapshot_version' | 'input_snapshot' | 'input_hash'>): PlanningInputSnapshotV2 {
   if (row.input_snapshot_version === null && row.input_snapshot === null) throw legacySnapshotError();
@@ -188,6 +188,26 @@ export function validateStoredPlan(blocks: ProposedTimeBlock[], current: Plannin
   return JSON.stringify(normalizedBlocks(blocks)) === JSON.stringify(normalizedBlocks(current.proposedBlocks));
 }
 
+function expectedPlanningResult(saved: PlanningSessionDetail, row: PlanningSessionRow, current: PlanningInput): PlanningResult {
+  const owned = new Set([...current.store.tasks.map((item) => `task:${item.id}`), ...current.store.routines.map((item) => `routine:${item.id}`)]);
+  const ordering = saved.advice?.orderedSources.map((item) => `${item.sourceType}:${item.sourceId}`).filter((item) => owned.has(item));
+  return ordering?.length ? buildPlanningResult({ now: new Date(row.input_now), events: current.events, tasks: current.store.tasks, routines: current.store.routines, completions: current.store.routineCompletions, orderingOverride: ordering }) : current.result;
+}
+
+function calendarPreviewEvents(blocks: readonly ProposedTimeBlock[], snapshot: PlanningInputSnapshotV2): CalendarEventPreviewItem[] {
+  const titles = new Map<string, string>([
+    ...snapshot.tasks.map((item) => [`task:${item.id}`, item.title] as const),
+    ...snapshot.routines.map((item) => [`routine:${item.id}`, item.title] as const),
+  ]);
+  return blocks.map((block) => {
+    const sourceId = block.taskId ?? block.routineId;
+    const title = sourceId ? titles.get(`${block.source}:${sourceId}`) : undefined;
+    const durationMinutes = (new Date(block.end).getTime() - new Date(block.start).getTime()) / 60_000;
+    if (!sourceId || !title || !Number.isInteger(durationMinutes) || durationMinutes <= 0) throw new PlanningApiError('PLAN_INVALID', 'Calendarプレビューを安全に生成できませんでした。', 422);
+    return { sourceType: block.source, sourceId, title, start: block.start, end: block.end, blockIndex: block.splitIndex, durationMinutes };
+  }).sort((a, b) => a.start.localeCompare(b.start) || a.sourceType.localeCompare(b.sourceType) || a.sourceId.localeCompare(b.sourceId) || a.blockIndex - b.blockIndex);
+}
+
 export type PlanningFreshnessReason = 'SESSION_EXPIRED' | 'WINDOW_EXPIRED' | 'BLOCK_ALREADY_STARTED' | 'BLOCK_ALREADY_ENDED';
 
 export function planningFreshnessReason(session: Pick<PlanningSessionRow, 'created_at' | 'window_end'>, blocks: readonly ProposedTimeBlock[], approvalNow: Date): PlanningFreshnessReason | null {
@@ -206,6 +226,35 @@ export function planningFreshnessReason(session: Pick<PlanningSessionRow, 'creat
 }
 
 const staleTimeError = () => new PlanningApiError('PLAN_STALE', '計画案の一部がすでに過去になっています。最新の計画案を作成してください。', 409);
+const stalePreviewError = () => new PlanningApiError('PLAN_STALE', '計画案が古くなっています。新しい計画案を作成し、再度承認してください。', 409);
+
+export async function getPlanningCalendarEventPreview(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningCalendarEventPreview> {
+  const deps = { ...defaultDependencies, ...dependencies };
+  const [{ data: row, error }, { data: blockRows, error: blockError }] = await Promise.all([
+    client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle(),
+    client.from('planning_blocks').select('*').eq('planning_session_id', id).eq('user_id', userId).order('start_at'),
+  ]);
+  if (error || blockError) throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendarプレビューを取得できませんでした。', 500);
+  if (!row) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  if (row.status !== 'approved') throw new PlanningApiError('PLAN_NOT_APPROVED', '承認済みの計画案だけをプレビューできます。', 409);
+
+  const snapshot = verifyStoredPlanningSnapshot(row);
+  const saved = detailFromRows(row, blockRows);
+  const current = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
+  if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。新しい計画案を作成し、再度承認してください。', 409);
+  const expected = expectedPlanningResult(saved, row, current);
+  if (!validateStoredPlan(saved.blocks, expected, current.store)) throw new PlanningApiError('PLAN_INVALID', '承認済み計画を再検証できませんでした。', 422);
+  if (planningFreshnessReason(row, expected.proposedBlocks, deps.now())) throw stalePreviewError();
+  const events = calendarPreviewEvents(saved.blocks, snapshot);
+
+  const { data: finalState, error: finalStateError } = await client.from('planning_sessions').select('status,blocks_revision').eq('id', id).eq('user_id', userId).maybeSingle();
+  if (finalStateError) throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendarプレビューを取得できませんでした。', 500);
+  if (!finalState) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  if (finalState.status !== 'approved') throw new PlanningApiError('PLAN_NOT_APPROVED', '計画案の承認状態が変更されています。最新の承認済み計画を選択してください。', 409);
+  if (finalState.blocks_revision !== row.blocks_revision) throw stalePreviewError();
+
+  return { sessionId: row.id, status: 'approved', windowStart: snapshot.window.start, windowEnd: snapshot.window.end, timeZone: snapshot.window.timeZone, events };
+}
 
 async function planningSnapshotForApproval(client: SupabaseClient<Database>, userId: string, id: string): Promise<{ saved: PlanningSessionDetail; row: PlanningSessionRow; blocksRevision: number }> {
   const { data: row, error } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
@@ -226,9 +275,7 @@ export async function approvePlanningSession(client: SupabaseClient<Database>, u
   verifyStoredPlanningSnapshot(row);
   const current = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
-  const owned = new Set([...current.store.tasks.map((item) => `task:${item.id}`), ...current.store.routines.map((item) => `routine:${item.id}`)]);
-  const ordering = saved.advice?.orderedSources.map((item) => `${item.sourceType}:${item.sourceId}`).filter((item) => owned.has(item));
-  const expected = ordering?.length ? buildPlanningResult({ now: new Date(row.input_now), events: current.events, tasks: current.store.tasks, routines: current.store.routines, completions: current.store.routineCompletions, orderingOverride: ordering }) : current.result;
+  const expected = expectedPlanningResult(saved, row, current);
   if (!validateStoredPlan(saved.blocks, expected, current.store)) throw new PlanningApiError('PLAN_INVALID', '計画案を再検証できませんでした。', 422);
   if (planningFreshnessReason(row, expected.proposedBlocks, deps.now())) throw staleTimeError();
   // approvedは確認状態にすぎない。将来のCalendar書き込みは直前の完全再検証と別の冪等APIを必須とする。
