@@ -1,9 +1,11 @@
 # Google Calendar Event Preview
 
 Planning Input Snapshot V2 was migrated and verified in production on 2026/07/31 (draft creation and approval both
-confirmed working end-to-end with `deterministic-v2`). Implementation may now proceed after the overlap-prevention
-migration below is applied and verified. Legacy hashes did not directly bind Task and
-Routine titles, so using current titles for an approved Session could misrepresent what was approved.
+confirmed working end-to-end with `deterministic-v2`). The overlap-prevention migration below was applied and verified
+in production on 2026/08/03: two approvals in immediate succession for the same user left exactly one `approved`
+session (the newer one) with the earlier overlapping session correctly moved to `superseded`. Implementation may now
+proceed. Legacy hashes did not directly bind Task and Routine titles, so using current titles for an approved Session
+could misrepresent what was approved.
 
 ## Resolved blocker before implementation
 
