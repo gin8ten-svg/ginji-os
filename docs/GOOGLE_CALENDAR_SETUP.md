@@ -1,7 +1,7 @@
 # Google Calendar setup
 
 この機能はGoogle Calendarを読み取り、承認済みPlanning Sessionの明示確認後に新しい予定を作成します。
-既存予定の更新・削除は行いません。
+Ginji OSが明示確認後に作成した予定だけは、別の確認フローからcanonical再同期・削除できます。他の既存予定は変更・削除しません。
 
 ## Google Cloud
 

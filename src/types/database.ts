@@ -108,11 +108,16 @@ export type TimeBlockRow = {
   google_calendar_id: string; google_event_id: string; calendar_write_status: 'writing' | 'succeeded' | 'failed';
   calendar_write_attempt_token: string | null; calendar_write_lease_until: string | null;
   calendar_write_attempt_count: number; calendar_write_error_code: string | null; written_at: string | null;
+  calendar_event_state: 'pending' | 'active' | 'deleted';
+  calendar_mutation_status: 'idle' | 'updating' | 'deleting' | 'update_failed' | 'delete_failed';
+  calendar_mutation_attempt_token: string | null; calendar_mutation_lease_until: string | null;
+  calendar_mutation_attempt_count: number; calendar_mutation_error_code: string | null;
+  calendar_updated_at: string | null; calendar_deleted_at: string | null;
   actual_minutes: number | null; created_at: string; updated_at: string;
 }
 
 export type AuditLogRow = {
-  id: string; user_id: string; action: 'calendar_event_write_succeeded' | 'calendar_event_write_failed';
+  id: string; user_id: string; action: 'calendar_event_write_succeeded' | 'calendar_event_write_failed' | 'calendar_event_update_succeeded' | 'calendar_event_update_failed' | 'calendar_event_delete_succeeded' | 'calendar_event_delete_failed';
   entity_type: 'time_block'; entity_id: string; before_data: Json | null; after_data: Json | null; created_at: string;
 }
 
@@ -143,6 +148,8 @@ export interface Database {
       get_calendar_connection_token: { Args: Record<never, never>; Returns: string | null };
       reserve_calendar_event_write: { Args: { p_session_id: string; p_block_id: string; p_input_hash: string; p_blocks_revision: number; p_calendar_id: string; p_google_event_id: string }; Returns: Json };
       complete_calendar_event_write: { Args: { p_block_id: string; p_attempt_token: string; p_success: boolean; p_error_code: string | null; p_after_data: Json }; Returns: string };
+      reserve_calendar_event_mutation: { Args: { p_session_id: string; p_block_id: string; p_input_hash: string; p_blocks_revision: number; p_operation: 'update' | 'delete' }; Returns: Json };
+      complete_calendar_event_mutation: { Args: { p_block_id: string; p_attempt_token: string; p_success: boolean; p_error_code: string | null; p_after_data: Json }; Returns: string };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

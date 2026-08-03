@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { CalendarEventAlreadyExistsError, CalendarServiceError, type GoogleCalendarEventWriteInput } from '@/lib/calendar/google-api';
-import { approvePlanningSession, createAdvisedPlanningSession, createPlanningSession, getPlanningCalendarEventPreview, getPlanningSession, planningFreshnessReason, planningGoogleEventId, rejectPlanningSession, writePlanningSessionToCalendar } from '@/lib/planning/server';
+import { approvePlanningSession, createAdvisedPlanningSession, createPlanningSession, getPlanningCalendarEventPreview, getPlanningSession, getPlanningSessionCalendarEventManagementPreview, mutatePlanningSessionCalendarEvents, planningFreshnessReason, planningGoogleEventId, rejectPlanningSession, writePlanningSessionToCalendar } from '@/lib/planning/server';
 import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
 import { buildPlanningResult } from '@/lib/planner/engine';
 import { PlanningApiError } from '@/lib/planning/responses';
@@ -56,8 +56,9 @@ const dependencies = (now = new Date('2026-07-15T01:00:00.000Z'), inputHash = ha
 const queueGet = (fake: FakeSupabase, session: PlanningSessionRow | null, blocks: PlanningBlockRow[] = [blockRow]) => { fake.queue('planning_sessions', 'select', { data: session, error: null }); fake.queue('planning_blocks', 'select', { data: blocks, error: null }); };
 const writableCalendar = { calendarId: 'primary', summary: 'Main', primary: true, selected: true, backgroundColor: null, accessRole: 'owner' as const, writable: true };
 const writeDependencies = (createEvent: (input: GoogleCalendarEventWriteInput) => Promise<ReturnType<typeof writtenEvent>> = async (input) => writtenEvent(input), planningResult = result) => ({ ...dependencies(new Date('2026-07-15T01:00:00.000Z'), hash, planningResult), calendarAccess: async () => ({ userId, accessToken: 'access-token', connection: { user_id: userId, granted_scopes: ['https://www.googleapis.com/auth/calendar.events'], selected_calendar_ids: ['primary'], needs_reconnect: false, connected_at: createdAt, updated_at: createdAt } }), listCalendars: async () => [writableCalendar], createEvent: async (_calendarId: string, _accessToken: string, input: GoogleCalendarEventWriteInput) => createEvent(input), getEvent: async (_calendarId: string, eventId: string) => writtenEvent({ eventId, title: 'Task', start: block.start, end: block.end, timeZone: 'Asia/Tokyo' }) });
-function writtenEvent(input: GoogleCalendarEventWriteInput) { return { id: input.eventId, title: input.title, start: input.start, end: input.end, status: 'confirmed' as const, writeKey: input.eventId }; }
+function writtenEvent(input: GoogleCalendarEventWriteInput) { return { id: input.eventId, title: input.title, start: input.start, end: input.end, status: 'confirmed' as const, writeKey: input.eventId, etag: '"event-etag"' }; }
 const queueWriteValidation = (fake: FakeSupabase, blocks: PlanningBlockRow[] = [blockRow], knownWrites: unknown[] = []) => { fake.queue('time_blocks', 'select', { data: knownWrites, error: null }); queueGet(fake, sessionRow('approved'), blocks); fake.queue('planning_sessions', 'select', { data: { status: 'approved', blocks_revision: 1 }, error: null }); };
+const managedRow = { planning_block_id: blockRow.id, google_calendar_id: 'primary', google_event_id: planningGoogleEventId(userId, sessionId, blockRow.id), start_at: block.start, end_at: block.end, calendar_write_status: 'succeeded' as const, calendar_event_state: 'active' as const };
 
 describe('planning session freshness', () => {
   const session = sessionRow();
@@ -115,7 +116,7 @@ describe('planning server runtime workflows', () => {
     queueGet(fake, sessionRow('approved'), [{ ...blockRow, title: '保存block側の未信頼title' }]);
     fake.queue('planning_sessions', 'select', { data: { status: 'approved', blocks_revision: 1 }, error: null });
     const preview = await getPlanningCalendarEventPreview(fake.client(), userId, sessionId, dependencies());
-    expect(preview).toEqual({ sessionId, status: 'approved', windowStart: snapshot.window.start, windowEnd: snapshot.window.end, timeZone: 'Asia/Tokyo', events: [{ sourceType: 'task', sourceId: block.taskId, title: 'Task', start: block.start, end: block.end, blockIndex: 1, durationMinutes: 60 }] });
+    expect(preview).toEqual({ sessionId, status: 'approved', windowStart: snapshot.window.start, windowEnd: snapshot.window.end, timeZone: 'Asia/Tokyo', calendarId: null, events: [{ sourceType: 'task', sourceId: block.taskId, title: 'Task', start: block.start, end: block.end, blockIndex: 1, durationMinutes: 60, calendarState: 'not_created' }] });
     expect(JSON.stringify(preview)).not.toMatch(/input_snapshot|inputSnapshot|input_hash|inputHash|blocks_revision|user_id/);
     expect(fake.rpcCalls).toHaveLength(0); expect(fake.calls.every((call) => call.operation === 'select')).toBe(true);
     fake.calls.forEach((call) => expect(call.filters).toContainEqual(['user_id', userId]));
@@ -238,6 +239,65 @@ describe('planning server runtime workflows', () => {
       listCalendars: async () => [{ ...writableCalendar, calendarId: 'shared@example.com', primary: false, selected: false }],
     })).rejects.toMatchObject({ code: 'CALENDAR_NOT_WRITABLE' });
     expect(nonPrimary.rpcCalls).toHaveLength(0);
+  });
+  it('作成済み予定を操作直前に再検証しETag付きでcanonical内容へ更新する', async () => {
+    const inputNow = new Date(snapshot.now);
+    const cleanResult = buildPlanningResult({ now: inputNow, events: [], tasks: store.tasks, routines: store.routines, completions: store.routineCompletions });
+    const cleanBlock = cleanResult.proposedBlocks[0]; expect(cleanBlock).toBeDefined();
+    const cleanSnapshot = buildPlanningInputSnapshotV2({ window: cleanResult.window, now: inputNow, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions, events: [] });
+    const cleanHash = hashPlanningInputSnapshotV2(cleanSnapshot);
+    const cleanSession = { ...sessionRow('approved'), window_start: cleanResult.window.start, window_end: cleanResult.window.end, input_hash: cleanHash, input_snapshot: cleanSnapshot as unknown as Json };
+    const cleanBlockRow = { ...blockRow, start_at: cleanBlock.start, end_at: cleanBlock.end, block_index: cleanBlock.splitIndex, duration_minutes: (new Date(cleanBlock.end).getTime() - new Date(cleanBlock.start).getTime()) / 60_000 };
+    const cleanManagedRow = { ...managedRow, start_at: cleanBlock.start, end_at: cleanBlock.end };
+    const shiftedBusyEvent = { id: cleanManagedRow.google_event_id, calendarId: 'primary', title: 'Google側で変更', start: new Date(new Date(cleanBlock.start).getTime() + 60 * 60_000).toISOString(), end: new Date(new Date(cleanBlock.end).getTime() + 60 * 60_000).toISOString(), allDay: false, status: 'confirmed' as const, htmlLink: null, colorId: null };
+    const shiftedResult = buildPlanningResult({ now: inputNow, events: [shiftedBusyEvent], tasks: store.tasks, routines: store.routines, completions: store.routineCompletions });
+    const shiftedSnapshot = buildPlanningInputSnapshotV2({ window: shiftedResult.window, now: inputNow, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions, events: [shiftedBusyEvent] });
+    const fake = new FakeSupabase(); fake.queue('time_blocks', 'select', { data: [cleanManagedRow], error: null }); queueGet(fake, cleanSession, [cleanBlockRow]); fake.queue('planning_sessions', 'select', { data: { status: 'approved', blocks_revision: 1 }, error: null });
+    fake.queueRpc({ data: { result: 'RESERVED', attempt_token: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, error: null });
+    fake.queueRpc({ data: 'FINISHED', error: null });
+    const canonical = writtenEvent({ eventId: cleanManagedRow.google_event_id, title: 'Task', start: cleanBlock.start, end: cleanBlock.end, timeZone: 'Asia/Tokyo' });
+    let updateCalls = 0;
+    const response = await mutatePlanningSessionCalendarEvents(fake.client(), userId, sessionId, 'update', {
+      ...writeDependencies(),
+      now: () => inputNow,
+      loadCurrentInput: async () => ({ store, events: [shiftedBusyEvent], result: shiftedResult, warningCodes: [], snapshot: shiftedSnapshot, hash: hashPlanningInputSnapshotV2(shiftedSnapshot) }),
+      getEvent: async () => ({ ...canonical, title: 'Google側で変更', etag: '"changed-etag"' }),
+      updateEvent: async (_calendarId, eventId, _accessToken, input, etag) => { updateCalls += 1; expect(eventId).toBe(cleanManagedRow.google_event_id); expect(input.title).toBe('Task'); expect(etag).toBe('"changed-etag"'); return canonical; },
+    });
+    expect(response).toMatchObject({ operation: 'update', status: 'completed', changedCount: 1, failedCount: 0 });
+    expect(updateCalls).toBe(1); expect(fake.rpcCalls.map((call) => call.name)).toEqual(['reserve_calendar_event_mutation', 'complete_calendar_event_mutation']);
+    expect(JSON.stringify(response)).not.toMatch(/google_event_id|attempt_token|access-token/i);
+  });
+  it('staleでも削除用管理Previewはsnapshot canonical内容だけを返す', async () => {
+    const fake = new FakeSupabase(); fake.queue('time_blocks', 'select', { data: [managedRow], error: null }); queueGet(fake, sessionRow('approved'), [{ ...blockRow, title: '未信頼title' }]);
+    const preview = await getPlanningSessionCalendarEventManagementPreview(fake.client(), userId, sessionId);
+    expect(preview).toEqual({ sessionId, status: 'approved', timeZone: 'Asia/Tokyo', calendarId: 'primary', events: [{ sourceType: 'task', sourceId: block.taskId, title: 'Task', start: block.start, end: block.end, blockIndex: 1, durationMinutes: 60, calendarState: 'active' }] });
+    expect(fake.rpcCalls).toHaveLength(0); expect(JSON.stringify(preview)).not.toMatch(/google_event_id|input_hash|blocks_revision|user_id/);
+  });
+  it('削除はcurrent hash/freshnessに依存せず所有済みeventだけをETag付きで削除する', async () => {
+    const fake = new FakeSupabase(); fake.queue('time_blocks', 'select', { data: [managedRow], error: null }); queueGet(fake, sessionRow('superseded'), [blockRow]);
+    fake.queueRpc({ data: { result: 'RESERVED', attempt_token: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, error: null });
+    fake.queueRpc({ data: 'FINISHED', error: null });
+    let deleteCalls = 0;
+    const response = await mutatePlanningSessionCalendarEvents(fake.client(), userId, sessionId, 'delete', {
+      ...writeDependencies(),
+      getEvent: async () => writtenEvent({ eventId: managedRow.google_event_id, title: 'Task', start: block.start, end: block.end, timeZone: 'Asia/Tokyo' }),
+      deleteEvent: async (_calendarId, eventId, _accessToken, etag) => { deleteCalls += 1; expect(eventId).toBe(managedRow.google_event_id); expect(etag).toBe('"event-etag"'); },
+    });
+    expect(response).toMatchObject({ operation: 'delete', status: 'completed', changedCount: 1 }); expect(deleteCalls).toBe(1);
+  });
+  it('所有マーカー不一致ではGoogle予定を変更せず失敗auditを確定する', async () => {
+    const fake = new FakeSupabase(); queueWriteValidation(fake, [blockRow], [managedRow]);
+    fake.queueRpc({ data: { result: 'RESERVED', attempt_token: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, error: null });
+    fake.queueRpc({ data: 'FINISHED', error: null });
+    let updateCalls = 0;
+    const response = await mutatePlanningSessionCalendarEvents(fake.client(), userId, sessionId, 'update', {
+      ...writeDependencies(),
+      getEvent: async () => ({ ...writtenEvent({ eventId: managedRow.google_event_id, title: 'Task', start: block.start, end: block.end, timeZone: 'Asia/Tokyo' }), writeKey: 'other-owner' }),
+      updateEvent: async () => { updateCalls += 1; throw new Error('must not update'); },
+    });
+    expect(response).toMatchObject({ status: 'failed', failedCount: 1, events: [{ mutationStatus: 'failed', errorCode: 'CALENDAR_EVENT_MISMATCH' }] });
+    expect(updateCalls).toBe(0); expect(fake.rpcCalls[1]).toMatchObject({ name: 'complete_calendar_event_mutation', args: { p_success: false, p_error_code: 'CALENDAR_EVENT_MISMATCH' } });
   });
   it('正常承認しDB hashだけをRPCへ渡す', async () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: 'APPROVED', error: null }); queueGet(fake, sessionRow('approved'));

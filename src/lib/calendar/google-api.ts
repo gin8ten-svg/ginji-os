@@ -4,6 +4,8 @@ import type { ExternalCalendarEvent, GoogleCalendarSummary } from '@/types/calen
 export class CalendarReconnectError extends Error {}
 export class CalendarServiceError extends Error {}
 export class CalendarEventAlreadyExistsError extends Error {}
+export class CalendarEventNotFoundError extends Error {}
+export class CalendarEventConflictError extends Error {}
 export class CalendarOAuthConfigurationError extends Error {}
 type Fetcher = typeof fetch;
 const MAX_PAGES = 20;
@@ -15,7 +17,7 @@ export interface GoogleCalendarEventWriteInput {
 }
 
 export interface GoogleCalendarWrittenEvent {
-  id: string; title: string; start: string; end: string; status: 'confirmed' | 'tentative' | 'cancelled'; writeKey: string | null;
+  id: string; title: string; start: string; end: string; status: 'confirmed' | 'tentative' | 'cancelled'; writeKey: string | null; etag: string | null;
 }
 
 function configured(name: 'GOOGLE_OAUTH_CLIENT_ID' | 'GOOGLE_OAUTH_CLIENT_SECRET'): string {
@@ -167,7 +169,7 @@ function normalizeWrittenGoogleEvent(value: unknown): GoogleCalendarWrittenEvent
   const extended = typeof item.extendedProperties === 'object' && item.extendedProperties ? item.extendedProperties as Record<string, unknown> : {};
   const privateValue = typeof extended.private === 'object' && extended.private ? extended.private as Record<string, unknown> : {};
   if (typeof item.id !== 'string' || typeof item.summary !== 'string' || typeof startValue.dateTime !== 'string' || typeof endValue.dateTime !== 'string') return null;
-  return { id: item.id, title: item.summary, start: startValue.dateTime, end: endValue.dateTime, status: item.status === 'cancelled' ? 'cancelled' : item.status === 'tentative' ? 'tentative' : 'confirmed', writeKey: typeof privateValue.ginjiEventId === 'string' ? privateValue.ginjiEventId : null };
+  return { id: item.id, title: item.summary, start: startValue.dateTime, end: endValue.dateTime, status: item.status === 'cancelled' ? 'cancelled' : item.status === 'tentative' ? 'tentative' : 'confirmed', writeKey: typeof privateValue.ginjiEventId === 'string' ? privateValue.ginjiEventId : null, etag: typeof item.etag === 'string' ? item.etag : null };
 }
 
 async function googleEventWriteResponse(url: URL, accessToken: string, init: RequestInit, fetcher: Fetcher): Promise<Response> {
@@ -194,10 +196,45 @@ export async function createGoogleCalendarEvent(calendarId: string, accessToken:
 export async function getGoogleCalendarEvent(calendarId: string, eventId: string, accessToken: string, fetcher: Fetcher = fetch): Promise<GoogleCalendarWrittenEvent> {
   const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
   const response = await googleEventWriteResponse(url, accessToken, { method: 'GET' }, fetcher);
+  if (response.status === 404 || response.status === 410) throw new CalendarEventNotFoundError('Google Calendar予定はすでに削除されています。');
   if (!response.ok) throw new CalendarServiceError('既存のGoogle Calendar予定を確認できませんでした。');
   const event = normalizeWrittenGoogleEvent(await response.json().catch(() => null));
   if (!event) throw new CalendarServiceError('Google Calendarの予定応答が不正です。');
   return event;
+}
+
+function validateGoogleEventMutationInput(eventId: string, input: GoogleCalendarEventWriteInput): void {
+  if (eventId !== input.eventId || !/^[0-9a-v]{5,1024}$/.test(input.eventId) || !input.title || !Number.isFinite(Date.parse(input.start)) || !Number.isFinite(Date.parse(input.end)) || new Date(input.start) >= new Date(input.end)) {
+    throw new CalendarServiceError('更新するGoogle Calendar予定が不正です。');
+  }
+}
+
+export async function updateGoogleCalendarEvent(calendarId: string, eventId: string, accessToken: string, input: GoogleCalendarEventWriteInput, etag: string, fetcher: Fetcher = fetch): Promise<GoogleCalendarWrittenEvent> {
+  validateGoogleEventMutationInput(eventId, input);
+  if (!etag) throw new CalendarServiceError('Google Calendar予定の更新条件が不正です。');
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
+  url.searchParams.set('sendUpdates', 'none');
+  const response = await googleEventWriteResponse(url, accessToken, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', 'if-match': etag },
+    body: JSON.stringify({ summary: input.title, start: { dateTime: input.start, timeZone: input.timeZone }, end: { dateTime: input.end, timeZone: input.timeZone }, transparency: 'opaque', extendedProperties: { private: { ginjiEventId: input.eventId } } }),
+  }, fetcher);
+  if (response.status === 404 || response.status === 410) throw new CalendarEventNotFoundError('Google Calendar予定はすでに削除されています。');
+  if (response.status === 412) throw new CalendarEventConflictError('Google Calendar予定が同時に変更されました。');
+  if (!response.ok) throw new CalendarServiceError('Google Calendar予定を更新できませんでした。');
+  const event = normalizeWrittenGoogleEvent(await response.json().catch(() => null));
+  if (!event || event.id !== input.eventId) throw new CalendarServiceError('Google Calendarの更新応答が不正です。');
+  return event;
+}
+
+export async function deleteGoogleCalendarEvent(calendarId: string, eventId: string, accessToken: string, etag: string, fetcher: Fetcher = fetch): Promise<void> {
+  if (!/^[0-9a-v]{5,1024}$/.test(eventId) || !etag) throw new CalendarServiceError('削除するGoogle Calendar予定が不正です。');
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
+  url.searchParams.set('sendUpdates', 'none');
+  const response = await googleEventWriteResponse(url, accessToken, { method: 'DELETE', headers: { 'if-match': etag } }, fetcher);
+  if (response.status === 404 || response.status === 410) throw new CalendarEventNotFoundError('Google Calendar予定はすでに削除されています。');
+  if (response.status === 412) throw new CalendarEventConflictError('Google Calendar予定が同時に変更されました。');
+  if (!response.ok) throw new CalendarServiceError('Google Calendar予定を削除できませんでした。');
 }
 
 export function googleCalendarEventMatchesWriteInput(event: GoogleCalendarWrittenEvent, input: GoogleCalendarEventWriteInput): boolean {

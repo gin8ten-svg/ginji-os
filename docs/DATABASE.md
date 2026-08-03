@@ -144,6 +144,14 @@ V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、
 | calendar_write_attempt_count | int | 1以上 |
 | calendar_write_error_code | text | failed時だけ保持 |
 | written_at | timestamptz | succeeded時だけ保持 |
+| calendar_event_state | text | pending/active/deleted |
+| calendar_mutation_status | text | idle/updating/deleting/update_failed/delete_failed |
+| calendar_mutation_attempt_token | uuid | 更新・削除処理中だけ保持 |
+| calendar_mutation_lease_until | timestamptz | 更新・削除処理中だけ保持 |
+| calendar_mutation_attempt_count | int | 0以上 |
+| calendar_mutation_error_code | text | 更新・削除失敗時だけ保持 |
+| calendar_updated_at | timestamptz | canonical再同期成功時刻 |
+| calendar_deleted_at | timestamptz | 削除成功時刻 |
 | actual_minutes | int | nullable |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
@@ -152,6 +160,8 @@ V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、
 Google Calendar/Event IDだけに対応する。認証ユーザーはown SELECTのみ可能で、mutationはSession行をlockして
 status/hash/revision/Calendarを再確認する `reserve_calendar_event_write` と、attempt tokenを照合して結果とauditを
 同一transactionで確定する `complete_calendar_event_write` だけを使う。
+作成済み予定の更新・削除は、同じ所有関係をlockする`reserve_calendar_event_mutation`と、attempt tokenを照合する
+`complete_calendar_event_mutation`だけを使う。削除済みeventは追加RPCから暗黙に再作成しない。
 
 ## audit_logs
 
@@ -166,7 +176,7 @@ status/hash/revision/Calendarを再確認する `reserve_calendar_event_write` �
 | after_data | jsonb |
 | created_at | timestamptz |
 
-Calendar書き込みではactionを`calendar_event_write_succeeded`または`calendar_event_write_failed`、entity_typeを
+Calendar追加・更新・削除ではactionを`calendar_event_{write|update|delete}_{succeeded|failed}`、entity_typeを
 `time_block`として記録する。RLS下でown SELECTだけを許可し、直接mutationは許可しない。
 
 ## ai_advice_rate_limits

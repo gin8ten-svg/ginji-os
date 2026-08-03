@@ -1,7 +1,7 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
-import { CalendarEventAlreadyExistsError, CalendarReconnectError, CalendarServiceError, createGoogleCalendarEvent, getGoogleCalendarEvent, googleCalendarEventMatchesWriteInput, listGoogleCalendars, listGoogleEvents, validateWritableCalendar, type GoogleCalendarEventWriteInput, type GoogleCalendarWrittenEvent } from '@/lib/calendar/google-api';
+import { CalendarEventAlreadyExistsError, CalendarEventConflictError, CalendarEventNotFoundError, CalendarReconnectError, CalendarServiceError, createGoogleCalendarEvent, deleteGoogleCalendarEvent, getGoogleCalendarEvent, googleCalendarEventMatchesWriteInput, listGoogleCalendars, listGoogleEvents, updateGoogleCalendarEvent, validateWritableCalendar, type GoogleCalendarEventWriteInput, type GoogleCalendarWrittenEvent } from '@/lib/calendar/google-api';
 import { calendarAccessContext, markCalendarNeedsReconnect } from '@/lib/calendar/server';
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
 import { adviceView, AI_ADVISOR_VERSION, buildPlanningAdviceInput, orderingSourceIds, sanitizeAdvice } from '@/lib/planning/advisor';
@@ -12,7 +12,7 @@ import { SupabaseTaskRepository } from '@/lib/supabase-task-repository';
 import { createClient } from '@/lib/supabase/server';
 import type { CalendarConnectionRow, Database, Json, PlanningBlockRow, PlanningSessionRow, TimeBlockRow } from '@/types/database';
 import type { PlanningResult, ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
-import type { CalendarEventPreviewItem, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventPreview, PlanningCalendarEventWriteItem, PlanningCalendarWriteResult, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
+import type { CalendarEventMutationOperation, CalendarEventPreviewItem, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventManagementPreview, PlanningCalendarEventMutationItem, PlanningCalendarEventMutationResult, PlanningCalendarEventPreview, PlanningCalendarEventWriteItem, PlanningCalendarWriteResult, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
 import type { TaskStore } from '@/types/tasks';
 import { hasGoogleCalendarEventWriteScope, type GoogleCalendarSummary } from '@/types/calendar';
 
@@ -197,7 +197,7 @@ function expectedPlanningResult(saved: PlanningSessionDetail, row: PlanningSessi
 }
 
 interface ValidatedPlanningCalendarBlock extends CalendarEventPreviewItem { planningBlockId: string }
-type KnownCalendarWrite = Pick<TimeBlockRow, 'google_calendar_id' | 'google_event_id' | 'start_at' | 'end_at'>;
+type KnownCalendarWrite = Pick<TimeBlockRow, 'planning_block_id' | 'google_calendar_id' | 'google_event_id' | 'start_at' | 'end_at' | 'calendar_write_status' | 'calendar_event_state'>;
 
 function calendarCandidateBlocks(blocks: readonly ProposedTimeBlock[], snapshot: PlanningInputSnapshotV2): ValidatedPlanningCalendarBlock[] {
   const titles = new Map<string, string>([
@@ -213,16 +213,16 @@ function calendarCandidateBlocks(blocks: readonly ProposedTimeBlock[], snapshot:
   }).sort((a, b) => a.start.localeCompare(b.start) || a.sourceType.localeCompare(b.sourceType) || a.sourceId.localeCompare(b.sourceId) || a.blockIndex - b.blockIndex);
 }
 
-function publicCalendarEvent(event: ValidatedPlanningCalendarBlock): CalendarEventPreviewItem {
-  return { sourceType: event.sourceType, sourceId: event.sourceId, title: event.title, start: event.start, end: event.end, blockIndex: event.blockIndex, durationMinutes: event.durationMinutes };
+function publicCalendarEvent(event: ValidatedPlanningCalendarBlock, calendarState?: CalendarEventPreviewItem['calendarState']): CalendarEventPreviewItem {
+  return { sourceType: event.sourceType, sourceId: event.sourceId, title: event.title, start: event.start, end: event.end, blockIndex: event.blockIndex, durationMinutes: event.durationMinutes, ...(calendarState ? { calendarState } : {}) };
 }
 
-function removeKnownCalendarWrites(input: PlanningInput, inputNow: Date, knownWrites: readonly KnownCalendarWrite[]): PlanningInput {
+function removeKnownCalendarWrites(input: PlanningInput, inputNow: Date, knownWrites: readonly KnownCalendarWrite[], allowManagedTimeDrift = false): PlanningInput {
   if (!knownWrites.length) return input;
-  const known = new Map(knownWrites.map((item) => [`${item.google_calendar_id}:${item.google_event_id}`, { start: new Date(item.start_at).getTime(), end: new Date(item.end_at).getTime() }]));
+  const known = new Map(knownWrites.map((item) => [`${item.google_calendar_id}:${item.google_event_id}`, { start: new Date(item.start_at).getTime(), end: new Date(item.end_at).getTime(), managed: item.calendar_write_status === 'succeeded' && item.calendar_event_state === 'active' }]));
   const events = input.events.filter((event) => {
     const expected = known.get(`${event.calendarId}:${event.id}`);
-    return !expected || expected.start !== new Date(event.start).getTime() || expected.end !== new Date(event.end).getTime();
+    return !expected || (!(allowManagedTimeDrift && expected.managed) && (expected.start !== new Date(event.start).getTime() || expected.end !== new Date(event.end).getTime()));
   });
   if (events.length === input.events.length) return input;
   const result = buildPlanningResult({ now: inputNow, events, tasks: input.store.tasks, routines: input.store.routines, completions: input.store.routineCompletions });
@@ -250,7 +250,7 @@ export function planningFreshnessReason(session: Pick<PlanningSessionRow, 'creat
 const staleTimeError = () => new PlanningApiError('PLAN_STALE', '計画案の一部がすでに過去になっています。最新の計画案を作成してください。', 409);
 const stalePreviewError = () => new PlanningApiError('PLAN_STALE', '計画案が古くなっています。新しい計画案を作成し、再度承認してください。', 409);
 
-async function validatePlanningCalendarCandidate(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies>, knownWrites: readonly KnownCalendarWrite[] = []): Promise<{ row: PlanningSessionRow; blocksRevision: number; events: ValidatedPlanningCalendarBlock[] }> {
+async function validatePlanningCalendarCandidate(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies>, knownWrites: readonly KnownCalendarWrite[] = [], allowManagedTimeDrift = false): Promise<{ row: PlanningSessionRow; blocksRevision: number; events: ValidatedPlanningCalendarBlock[] }> {
   const deps = { ...defaultDependencies, ...dependencies };
   const [{ data: row, error }, { data: blockRows, error: blockError }] = await Promise.all([
     client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle(),
@@ -263,7 +263,7 @@ async function validatePlanningCalendarCandidate(client: SupabaseClient<Database
   const snapshot = verifyStoredPlanningSnapshot(row);
   const saved = detailFromRows(row, blockRows);
   const inputNow = new Date(row.input_now);
-  const current = removeKnownCalendarWrites(await deps.loadCurrentInput(client, userId, inputNow), inputNow, knownWrites);
+  const current = removeKnownCalendarWrites(await deps.loadCurrentInput(client, userId, inputNow), inputNow, knownWrites, allowManagedTimeDrift);
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。新しい計画案を作成し、再度承認してください。', 409);
   const expected = expectedPlanningResult(saved, row, current);
   if (!validateStoredPlan(saved.blocks, expected, current.store)) throw new PlanningApiError('PLAN_INVALID', '承認済み計画を再検証できませんでした。', 422);
@@ -280,10 +280,19 @@ async function validatePlanningCalendarCandidate(client: SupabaseClient<Database
 }
 
 export async function getPlanningCalendarEventPreview(client: SupabaseClient<Database>, userId: string, id: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningCalendarEventPreview> {
-  const validated = await validatePlanningCalendarCandidate(client, userId, id, dependencies);
+  const { data: knownRows, error: knownRowsError } = await client.from('time_blocks').select('planning_block_id,google_calendar_id,google_event_id,start_at,end_at,calendar_write_status,calendar_event_state').eq('planning_session_id', id).eq('user_id', userId);
+  if (knownRowsError) throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendar書き込み状態を確認できませんでした。', 500);
+  const knownWrites = (knownRows ?? []) as KnownCalendarWrite[];
+  const validated = await validatePlanningCalendarCandidate(client, userId, id, dependencies, knownWrites, true);
   const snapshot = verifyStoredPlanningSnapshot(validated.row);
-  const events = validated.events.map(publicCalendarEvent);
-  return { sessionId: validated.row.id, status: 'approved', windowStart: snapshot.window.start, windowEnd: snapshot.window.end, timeZone: snapshot.window.timeZone, events };
+  const byBlock = new Map(knownWrites.map((row) => [row.planning_block_id, row]));
+  const events = validated.events.map((event) => {
+    const row = byBlock.get(event.planningBlockId);
+    const calendarState: CalendarEventPreviewItem['calendarState'] = !row ? 'not_created' : row.calendar_event_state === 'deleted' ? 'deleted' : row.calendar_write_status === 'succeeded' ? 'active' : row.calendar_write_status === 'writing' ? 'writing' : 'write_failed';
+    return publicCalendarEvent(event, calendarState);
+  });
+  const calendarIds = [...new Set(knownWrites.map((row) => row.google_calendar_id))];
+  return { sessionId: validated.row.id, status: 'approved', windowStart: snapshot.window.start, windowEnd: snapshot.window.end, timeZone: snapshot.window.timeZone, calendarId: calendarIds.length === 1 ? calendarIds[0] : null, events };
 }
 
 interface PlanningCalendarWriteAccess { userId: string; accessToken: string; connection: CalendarConnectionRow }
@@ -292,6 +301,8 @@ interface PlanningCalendarWriteDependencies extends PlanningServerDependencies {
   listCalendars: (accessToken: string, selectedIds: readonly string[]) => Promise<GoogleCalendarSummary[]>;
   createEvent: (calendarId: string, accessToken: string, input: GoogleCalendarEventWriteInput) => Promise<GoogleCalendarWrittenEvent>;
   getEvent: (calendarId: string, eventId: string, accessToken: string) => Promise<GoogleCalendarWrittenEvent>;
+  updateEvent: (calendarId: string, eventId: string, accessToken: string, input: GoogleCalendarEventWriteInput, etag: string) => Promise<GoogleCalendarWrittenEvent>;
+  deleteEvent: (calendarId: string, eventId: string, accessToken: string, etag: string) => Promise<void>;
 }
 
 async function requiredPlanningCalendarWriteAccess(userId: string): Promise<PlanningCalendarWriteAccess> {
@@ -315,6 +326,8 @@ const defaultPlanningCalendarWriteDependencies: PlanningCalendarWriteDependencie
   listCalendars: listGoogleCalendars,
   createEvent: createGoogleCalendarEvent,
   getEvent: getGoogleCalendarEvent,
+  updateEvent: updateGoogleCalendarEvent,
+  deleteEvent: deleteGoogleCalendarEvent,
 };
 
 export function planningGoogleEventId(userId: string, sessionId: string, blockId: string): string {
@@ -342,6 +355,7 @@ async function reserveCalendarEventWrite(client: SupabaseClient<Database>, valid
   if (result === 'INPUT_CHANGED' || result === 'BLOCKS_CHANGED') throw stalePreviewError();
   if (result === 'BLOCK_NOT_FOUND') throw new PlanningApiError('PLAN_INVALID', '承認済み計画のblockを確認できませんでした。', 422);
   if (result === 'CALENDAR_MISMATCH') throw new PlanningApiError('CALENDAR_TARGET_MISMATCH', 'この計画案は別のCalendarへの書き込みが開始されています。', 409);
+  if (result === 'EVENT_DELETED') throw new PlanningApiError('CALENDAR_EVENT_NOT_FOUND', 'この計画案の予定は削除済みです。再追加する場合は新しい計画案を作成・承認してください。', 409);
   throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendar書き込み状態を確認できませんでした。', 500);
 }
 
@@ -370,7 +384,7 @@ function writeResultItem(event: ValidatedPlanningCalendarBlock, writeStatus: Pla
 
 export async function writePlanningSessionToCalendar(client: SupabaseClient<Database>, userId: string, id: string, calendarId: string, dependencies: Partial<PlanningCalendarWriteDependencies> = {}): Promise<PlanningCalendarWriteResult> {
   const deps = { ...defaultPlanningCalendarWriteDependencies, ...dependencies };
-  const { data: knownRows, error: knownRowsError } = await client.from('time_blocks').select('google_calendar_id,google_event_id,start_at,end_at').eq('planning_session_id', id).eq('user_id', userId);
+  const { data: knownRows, error: knownRowsError } = await client.from('time_blocks').select('planning_block_id,google_calendar_id,google_event_id,start_at,end_at,calendar_write_status,calendar_event_state').eq('planning_session_id', id).eq('user_id', userId);
   if (knownRowsError) throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendar書き込み状態を確認できませんでした。', 500);
   const validated = await validatePlanningCalendarCandidate(client, userId, id, deps, (knownRows ?? []) as KnownCalendarWrite[]);
   const access = await deps.calendarAccess(userId);
@@ -429,6 +443,184 @@ export async function writePlanningSessionToCalendar(client: SupabaseClient<Data
   const completedCount = createdCount + alreadyCreatedCount;
   const status = failedCount + inProgressCount + notAttemptedCount === 0 ? 'completed' : completedCount > 0 ? 'partial' : 'failed';
   return { sessionId: id, calendarId, status, createdCount, alreadyCreatedCount, failedCount, inProgressCount, notAttemptedCount, needsReconnect, events: results };
+}
+
+type ManagedCalendarRow = Pick<TimeBlockRow, 'planning_block_id' | 'google_calendar_id' | 'google_event_id' | 'start_at' | 'end_at' | 'calendar_write_status' | 'calendar_event_state'>;
+type CalendarMutationReservation = { result: 'RESERVED'; attemptToken: string } | { result: 'ALREADY_DELETED' } | { result: 'IN_PROGRESS' };
+
+async function loadManagedCalendarRows(client: SupabaseClient<Database>, userId: string, id: string): Promise<ManagedCalendarRow[]> {
+  const { data, error } = await client.from('time_blocks').select('planning_block_id,google_calendar_id,google_event_id,start_at,end_at,calendar_write_status,calendar_event_state').eq('planning_session_id', id).eq('user_id', userId).eq('calendar_write_status', 'succeeded');
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '作成済みCalendar予定を確認できませんでした。', 500);
+  return (data ?? []) as ManagedCalendarRow[];
+}
+
+function managedCalendarEvents(userId: string, sessionId: string, events: readonly ValidatedPlanningCalendarBlock[], rows: readonly ManagedCalendarRow[]): Array<{ event: ValidatedPlanningCalendarBlock; row: ManagedCalendarRow }> {
+  const byBlock = new Map(events.map((event) => [event.planningBlockId, event]));
+  return rows.map((row) => {
+    const event = byBlock.get(row.planning_block_id);
+    if (!event || row.google_event_id !== planningGoogleEventId(userId, sessionId, row.planning_block_id) || new Date(row.start_at).getTime() !== new Date(event.start).getTime() || new Date(row.end_at).getTime() !== new Date(event.end).getTime()) {
+      throw new PlanningApiError('PLAN_INVALID', '作成済みCalendar予定と承認済み計画の対応を検証できませんでした。', 422);
+    }
+    return { event, row };
+  });
+}
+
+async function storedCalendarEventsForDeletion(client: SupabaseClient<Database>, userId: string, id: string, rows: readonly ManagedCalendarRow[]): Promise<{ row: PlanningSessionRow; blocksRevision: number; managed: ReturnType<typeof managedCalendarEvents> }> {
+  const [{ data: session, error }, { data: blocks, error: blockError }] = await Promise.all([
+    client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle(),
+    client.from('planning_blocks').select('*').eq('planning_session_id', id).eq('user_id', userId).order('start_at'),
+  ]);
+  if (error || blockError) throw new PlanningApiError('PERSISTENCE_FAILED', '作成済みCalendar予定を確認できませんでした。', 500);
+  if (!session) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  if (session.status !== 'approved' && session.status !== 'superseded') throw new PlanningApiError('PLAN_NOT_APPROVED', '承認済みまたは更新済みの計画案だけを管理できます。', 409);
+  const snapshot = verifyStoredPlanningSnapshot(session);
+  const events = calendarCandidateBlocks(blocks.map(proposedFromRow), snapshot);
+  return { row: session, blocksRevision: session.blocks_revision, managed: managedCalendarEvents(userId, id, events, rows) };
+}
+
+export async function getPlanningSessionCalendarEventManagementPreview(client: SupabaseClient<Database>, userId: string, id: string): Promise<PlanningCalendarEventManagementPreview> {
+  const rows = await loadManagedCalendarRows(client, userId, id);
+  if (!rows.length) throw new PlanningApiError('CALENDAR_EVENT_NOT_FOUND', 'この計画案には作成済みのGoogle Calendar予定がありません。', 409);
+  const validated = await storedCalendarEventsForDeletion(client, userId, id, rows);
+  const calendarIds = [...new Set(rows.map((row) => row.google_calendar_id))];
+  if (calendarIds.length !== 1) throw new PlanningApiError('PLAN_INVALID', '管理対象のCalendarを一意に確認できませんでした。', 422);
+  return {
+    sessionId: id,
+    status: validated.row.status as 'approved' | 'superseded',
+    timeZone: 'Asia/Tokyo',
+    calendarId: calendarIds[0],
+    events: validated.managed.map(({ event, row }) => publicCalendarEvent(event, row.calendar_event_state === 'deleted' ? 'deleted' : 'active')),
+  };
+}
+
+async function reserveCalendarEventMutation(client: SupabaseClient<Database>, validated: { row: PlanningSessionRow; blocksRevision: number }, blockId: string, operation: CalendarEventMutationOperation): Promise<CalendarMutationReservation> {
+  const { data, error } = await client.rpc('reserve_calendar_event_mutation', { p_session_id: validated.row.id, p_block_id: blockId, p_input_hash: validated.row.input_hash, p_blocks_revision: validated.blocksRevision, p_operation: operation });
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendar予定の操作状態を保存できませんでした。', 500);
+  const value = jsonObject(data); const result = typeof value?.result === 'string' ? value.result : null;
+  if (result === 'RESERVED' && typeof value?.attempt_token === 'string') return { result, attemptToken: value.attempt_token };
+  if (result === 'ALREADY_DELETED' || result === 'IN_PROGRESS') return { result };
+  if (result === 'NOT_FOUND') throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  if (result === 'NOT_APPROVED' || result === 'NOT_MANAGEABLE') throw new PlanningApiError('PLAN_NOT_APPROVED', '計画案の状態が変更されています。', 409);
+  if (result === 'INPUT_CHANGED' || result === 'BLOCKS_CHANGED') throw stalePreviewError();
+  if (result === 'BLOCK_NOT_FOUND') throw new PlanningApiError('PLAN_INVALID', '承認済み計画のblockを確認できませんでした。', 422);
+  if (result === 'EVENT_NOT_FOUND' || result === 'EVENT_DELETED') throw new PlanningApiError('CALENDAR_EVENT_NOT_FOUND', '管理対象のGoogle Calendar予定が見つかりません。', 409);
+  throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendar予定の操作状態を確認できませんでした。', 500);
+}
+
+async function completeCalendarEventMutation(client: SupabaseClient<Database>, blockId: string, attemptToken: string, success: boolean, errorCode: string | null, outcome: string): Promise<void> {
+  const { data, error } = await client.rpc('complete_calendar_event_mutation', { p_block_id: blockId, p_attempt_token: attemptToken, p_success: success, p_error_code: errorCode, p_after_data: { outcome } });
+  if (error || data !== 'FINISHED') throw new PlanningApiError('PERSISTENCE_FAILED', 'Calendar予定の操作結果を保存できませんでした。再試行してください。', 500);
+}
+
+function mutationResultItem(event: ValidatedPlanningCalendarBlock, mutationStatus: PlanningCalendarEventMutationItem['mutationStatus'], errorCode: PlanningCalendarEventMutationItem['errorCode'] = null): PlanningCalendarEventMutationItem {
+  return { ...publicCalendarEvent(event), mutationStatus, errorCode };
+}
+
+function calendarMutationErrorCode(error: unknown): PlanningCalendarEventMutationItem['errorCode'] {
+  if (error instanceof CalendarEventNotFoundError) return 'CALENDAR_EVENT_NOT_FOUND';
+  if (error instanceof CalendarEventConflictError) return 'CALENDAR_EVENT_CONFLICT';
+  if (error instanceof CalendarServiceError && error.message.includes('所有')) return 'CALENDAR_EVENT_MISMATCH';
+  return 'CALENDAR_WRITE_FAILED';
+}
+
+async function requiredManagedCalendar(client: SupabaseClient<Database>, userId: string, rows: readonly ManagedCalendarRow[], deps: PlanningCalendarWriteDependencies): Promise<{ access: PlanningCalendarWriteAccess; calendarId: string }> {
+  const calendarIds = [...new Set(rows.map((row) => row.google_calendar_id))];
+  if (calendarIds.length !== 1) throw new PlanningApiError('PLAN_INVALID', '管理対象のCalendarを一意に確認できませんでした。', 422);
+  const access = await deps.calendarAccess(userId);
+  let calendars: GoogleCalendarSummary[];
+  try { calendars = await deps.listCalendars(access.accessToken, access.connection.selected_calendar_ids); }
+  catch (error) {
+    if (error instanceof CalendarReconnectError) {
+      await markCalendarNeedsReconnect(client, userId);
+      throw new PlanningApiError('CALENDAR_RECONNECT_REQUIRED', 'Google Calendarを再接続してください。', 409);
+    }
+    throw new PlanningApiError('CALENDAR_WRITE_FAILED', '管理対象Calendarを確認できませんでした。', 502);
+  }
+  try { validateWritableCalendar(calendarIds[0], calendars); }
+  catch { throw new PlanningApiError('CALENDAR_NOT_WRITABLE', '管理対象Calendarへの書き込み権限を確認してください。', 409); }
+  return { access, calendarId: calendarIds[0] };
+}
+
+export async function mutatePlanningSessionCalendarEvents(client: SupabaseClient<Database>, userId: string, id: string, operation: CalendarEventMutationOperation, dependencies: Partial<PlanningCalendarWriteDependencies> = {}): Promise<PlanningCalendarEventMutationResult> {
+  const deps = { ...defaultPlanningCalendarWriteDependencies, ...dependencies };
+  const rows = await loadManagedCalendarRows(client, userId, id);
+  if (!rows.length) throw new PlanningApiError('CALENDAR_EVENT_NOT_FOUND', 'この計画案には作成済みのGoogle Calendar予定がありません。', 409);
+
+  let validated: { row: PlanningSessionRow; blocksRevision: number; managed: ReturnType<typeof managedCalendarEvents> };
+  if (operation === 'update') {
+    const candidate = await validatePlanningCalendarCandidate(client, userId, id, deps, rows, true);
+    validated = { row: candidate.row, blocksRevision: candidate.blocksRevision, managed: managedCalendarEvents(userId, id, candidate.events, rows) };
+  } else {
+    validated = await storedCalendarEventsForDeletion(client, userId, id, rows);
+  }
+  const activeManaged = validated.managed.filter(({ row }) => row.calendar_event_state === 'active');
+  if (!activeManaged.length && operation === 'update') throw new PlanningApiError('CALENDAR_EVENT_NOT_FOUND', '再同期できるGoogle Calendar予定がありません。', 409);
+  const { access, calendarId } = await requiredManagedCalendar(client, userId, rows, deps);
+  const results: PlanningCalendarEventMutationItem[] = [];
+  let needsReconnect = false;
+
+  for (let index = 0; index < validated.managed.length; index += 1) {
+    const { event, row } = validated.managed[index];
+    if (row.calendar_event_state === 'deleted') {
+      if (operation === 'delete') results.push(mutationResultItem(event, 'already_deleted'));
+      continue;
+    }
+    const reservation = await reserveCalendarEventMutation(client, validated, event.planningBlockId, operation);
+    if (reservation.result === 'ALREADY_DELETED') { results.push(mutationResultItem(event, 'already_deleted')); continue; }
+    if (reservation.result === 'IN_PROGRESS') { results.push(mutationResultItem(event, 'in_progress')); continue; }
+
+    const input: GoogleCalendarEventWriteInput = { eventId: row.google_event_id, title: event.title, start: event.start, end: event.end, timeZone: 'Asia/Tokyo' };
+    let outcome: PlanningCalendarEventMutationItem['mutationStatus'];
+    try {
+      let existing: GoogleCalendarWrittenEvent;
+      try { existing = await deps.getEvent(calendarId, row.google_event_id, access.accessToken); }
+      catch (error) {
+        if (operation === 'delete' && error instanceof CalendarEventNotFoundError) {
+          await completeCalendarEventMutation(client, event.planningBlockId, reservation.attemptToken, true, null, 'already_deleted');
+          results.push(mutationResultItem(event, 'already_deleted'));
+          continue;
+        }
+        throw error;
+      }
+      if (existing.id !== row.google_event_id || existing.writeKey !== row.google_event_id) throw new CalendarServiceError('Google Calendar予定の所有マーカーが一致しません。');
+      if (operation === 'update') {
+        if (googleCalendarEventMatchesWriteInput(existing, input)) outcome = 'already_current';
+        else {
+          if (!existing.etag) throw new CalendarServiceError('Google Calendar予定の更新条件を確認できません。');
+          const updated = await deps.updateEvent(calendarId, row.google_event_id, access.accessToken, input, existing.etag);
+          if (!googleCalendarEventMatchesWriteInput(updated, input)) throw new CalendarServiceError('Google Calendar予定をcanonical内容へ更新できませんでした。');
+          outcome = 'updated';
+        }
+      } else {
+        if (!existing.etag) throw new CalendarServiceError('Google Calendar予定の削除条件を確認できません。');
+        try { await deps.deleteEvent(calendarId, row.google_event_id, access.accessToken, existing.etag); outcome = 'deleted'; }
+        catch (error) { if (error instanceof CalendarEventNotFoundError) outcome = 'already_deleted'; else throw error; }
+      }
+    } catch (error) {
+      const reconnect = error instanceof CalendarReconnectError;
+      const errorCode = reconnect ? 'CALENDAR_RECONNECT_REQUIRED' : calendarMutationErrorCode(error);
+      await completeCalendarEventMutation(client, event.planningBlockId, reservation.attemptToken, false, errorCode, 'failed');
+      results.push(mutationResultItem(event, 'failed', errorCode));
+      if (reconnect) {
+        needsReconnect = true;
+        await markCalendarNeedsReconnect(client, userId);
+        for (const remaining of validated.managed.slice(index + 1)) results.push(mutationResultItem(remaining.event, 'not_attempted'));
+        break;
+      }
+      continue;
+    }
+    await completeCalendarEventMutation(client, event.planningBlockId, reservation.attemptToken, true, null, outcome);
+    results.push(mutationResultItem(event, outcome));
+  }
+
+  const changedCount = results.filter((item) => item.mutationStatus === 'updated' || item.mutationStatus === 'deleted').length;
+  const unchangedCount = results.filter((item) => item.mutationStatus === 'already_current' || item.mutationStatus === 'already_deleted').length;
+  const failedCount = results.filter((item) => item.mutationStatus === 'failed').length;
+  const inProgressCount = results.filter((item) => item.mutationStatus === 'in_progress').length;
+  const notAttemptedCount = results.filter((item) => item.mutationStatus === 'not_attempted').length;
+  const completedCount = changedCount + unchangedCount;
+  const status = failedCount + inProgressCount + notAttemptedCount === 0 ? 'completed' : completedCount > 0 ? 'partial' : 'failed';
+  return { sessionId: id, calendarId, operation, status, changedCount, unchangedCount, failedCount, inProgressCount, notAttemptedCount, needsReconnect, events: results };
 }
 
 async function planningSnapshotForApproval(client: SupabaseClient<Database>, userId: string, id: string): Promise<{ saved: PlanningSessionDetail; row: PlanningSessionRow; blocksRevision: number }> {

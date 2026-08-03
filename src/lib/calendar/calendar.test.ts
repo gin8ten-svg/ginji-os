@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { safeAuthDestination } from '@/lib/auth/urls';
 import { disconnectCalendarConnection, publicConnectionStatus, saveCalendarConnection } from '@/lib/calendar/connection';
-import { CalendarEventAlreadyExistsError, CalendarOAuthConfigurationError, CalendarReconnectError, CalendarServiceError, createGoogleCalendarEvent, getGoogleCalendarEvent, googleCalendarEventMatchesWriteInput, listGoogleCalendars, listGoogleEvents, normalizeGoogleEvent, refreshGoogleAccessToken, revokeGoogleToken, validateCalendarIdInput, validateCalendarSelection, validateEventRange, validateWritableCalendar } from '@/lib/calendar/google-api';
+import { CalendarEventAlreadyExistsError, CalendarEventConflictError, CalendarEventNotFoundError, CalendarOAuthConfigurationError, CalendarReconnectError, CalendarServiceError, createGoogleCalendarEvent, deleteGoogleCalendarEvent, getGoogleCalendarEvent, googleCalendarEventMatchesWriteInput, listGoogleCalendars, listGoogleEvents, normalizeGoogleEvent, refreshGoogleAccessToken, revokeGoogleToken, updateGoogleCalendarEvent, validateCalendarIdInput, validateCalendarSelection, validateEventRange, validateWritableCalendar } from '@/lib/calendar/google-api';
 import { decryptRefreshToken, encryptRefreshToken } from '@/lib/calendar/token-crypto';
 import { datesCoveredByAllDayEvent } from '@/lib/calendar/event-dates';
 import { createCalendarOAuthState, verifyCalendarOAuthState } from '@/lib/calendar/oauth-state';
@@ -60,11 +60,27 @@ describe('Google Calendar read normalization', () => {
 
 describe('Google Calendar event write', () => {
   const input = { eventId: '0123456789abcdef', title: 'Snapshot title', start: '2026-07-15T02:00:00.000Z', end: '2026-07-15T03:00:00.000Z', timeZone: 'Asia/Tokyo' as const };
-  const providerEvent = { id: input.eventId, summary: input.title, status: 'confirmed', start: { dateTime: input.start }, end: { dateTime: input.end }, extendedProperties: { private: { ginjiEventId: input.eventId } } };
+  const providerEvent = { id: input.eventId, etag: '"event-etag"', summary: input.title, status: 'confirmed', start: { dateTime: input.start }, end: { dateTime: input.end }, extendedProperties: { private: { ginjiEventId: input.eventId } } };
   it('canonical title・時刻・決定論的IDだけをPOSTしTokenをbodyへ含めない', async () => { const event = await createGoogleCalendarEvent('primary', 'access-secret', input, async (url, init) => { expect(String(url)).toContain('/calendars/primary/events'); expect(init?.method).toBe('POST'); expect((init?.headers as Record<string, string>).authorization).toBe('Bearer access-secret'); const body = JSON.parse(String(init?.body)); expect(body).toMatchObject({ id: input.eventId, summary: 'Snapshot title', start: { dateTime: input.start, timeZone: 'Asia/Tokyo' }, end: { dateTime: input.end, timeZone: 'Asia/Tokyo' } }); expect(JSON.stringify(body)).not.toContain('access-secret'); return json(providerEvent); }); expect(event.id).toBe(input.eventId); });
   it('409を重複専用errorにしGETした同一eventを照合できる', async () => { await expect(createGoogleCalendarEvent('primary', 'access', input, async () => json({ error: { message: 'provider detail' } }, 409))).rejects.toBeInstanceOf(CalendarEventAlreadyExistsError); const event = await getGoogleCalendarEvent('primary', input.eventId, 'access', async (_url, init) => { expect(init?.method).toBe('GET'); return json(providerEvent); }); expect(googleCalendarEventMatchesWriteInput(event, input)).toBe(true); expect(googleCalendarEventMatchesWriteInput({ ...event, title: 'Changed' }, input)).toBe(false); });
   it.each([401, 403])('作成時の%iを再接続errorにする', async (status) => { await expect(createGoogleCalendarEvent('primary', 'access', input, async () => json({}, status))).rejects.toBeInstanceOf(CalendarReconnectError); });
   it('providerの生errorを返さない', async () => { await expect(createGoogleCalendarEvent('primary', 'access', input, async () => json({ error: 'provider-secret-detail' }, 500))).rejects.toMatchObject({ message: 'Google Calendarへ予定を作成できませんでした。' }); });
+  it('ETag付きPATCHでcanonical内容だけを再同期する', async () => {
+    const event = await updateGoogleCalendarEvent('primary', input.eventId, 'access-secret', input, '"event-etag"', async (url, init) => {
+      expect(String(url)).toContain(`/events/${input.eventId}`); expect(init?.method).toBe('PATCH');
+      expect((init?.headers as Record<string, string>)['if-match']).toBe('"event-etag"');
+      const body = JSON.parse(String(init?.body)); expect(body).toMatchObject({ summary: input.title, extendedProperties: { private: { ginjiEventId: input.eventId } } });
+      expect(body).not.toHaveProperty('id'); expect(JSON.stringify(body)).not.toContain('access-secret');
+      return json(providerEvent);
+    });
+    expect(googleCalendarEventMatchesWriteInput(event, input)).toBe(true);
+  });
+  it('ETag付きDELETEを送り404は削除済み・412は競合として区別する', async () => {
+    await expect(deleteGoogleCalendarEvent('primary', input.eventId, 'access', '"event-etag"', async (_url, init) => { expect(init?.method).toBe('DELETE'); expect((init?.headers as Record<string, string>)['if-match']).toBe('"event-etag"'); return new Response(null, { status: 204 }); })).resolves.toBeUndefined();
+    await expect(deleteGoogleCalendarEvent('primary', input.eventId, 'access', '"event-etag"', async () => json({}, 404))).rejects.toBeInstanceOf(CalendarEventNotFoundError);
+    await expect(updateGoogleCalendarEvent('primary', input.eventId, 'access', input, '"event-etag"', async () => json({}, 412))).rejects.toBeInstanceOf(CalendarEventConflictError);
+  });
+  it('GETの404を削除済みとして区別する', async () => { await expect(getGoogleCalendarEvent('primary', input.eventId, 'access', async () => json({}, 404))).rejects.toBeInstanceOf(CalendarEventNotFoundError); });
 });
 
 describe('終日イベント日付展開', () => {
