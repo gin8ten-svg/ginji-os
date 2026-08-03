@@ -115,8 +115,9 @@ Supabase Authのユーザーに紐づく設定。
 terminal status（approved/rejected/superseded）のsnapshot列とblocksは変更不能。例外的に、新しいSessionの承認RPCだけが
 windowの重複するapprovedを、元のapproved_atを保持してsupersededへ遷移できる。approvedのhalf-open window重複は
 DB排他制約でも禁止する。利用者はSessionを直接UPDATE・DELETEできず、status遷移だけを専用RPCで行う。
-生成は `create_planning_session` がblocksと同一transactionで保存する。
-V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、legacy行はsnapshot列をnullのまま維持する。
+生成は `create_planning_session_v2` がcanonical snapshotとblocksを同一transactionで保存する。
+V2 rollout完了後、旧 `create_planning_session` RPCは`20260803000400_drop_legacy_planning_session_rpc.sql`で
+実行権限を剥奪して削除した。既存legacy行はsnapshot列をnullのまま読み取り専用で維持する。
 
 ## planning_blocks
 
