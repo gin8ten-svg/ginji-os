@@ -96,6 +96,10 @@ Google Calendar Event Previewは承認済みV2 Sessionだけを再検証して�
 同じ検証を独立して再実行し、DB予約RPCでstatus/hash/revision/block/対象CalendarをGoogle呼び出し直前にも確認する。
 詳細は `docs/GOOGLE_CALENDAR_WRITE.md` を参照する。
 
+作成済みGoogle予定の再同期・削除も、DBに保存したCalendar/Event対応とGoogle private所有マーカーを操作直前に照合する。
+再同期はfreshなapproved計画のcanonical snapshotだけを使い、削除はstale/superseded後の清掃を可能にする代わりに保存snapshot・
+immutable block・所有関係・対象Calendarを再検証する。両操作とも最新ETagを`If-Match`で送り、明示確認なしに実行しない。
+
 ## 4. Time handling
 
 - DB保存: UTC

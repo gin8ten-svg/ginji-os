@@ -1,7 +1,7 @@
 import type { ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
 
 export type PlanningSessionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
-export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
+export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'CALENDAR_EVENT_NOT_FOUND' | 'CALENDAR_EVENT_MISMATCH' | 'CALENDAR_EVENT_CONFLICT' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
 
 export interface PlanningAdviceView {
   advisorVersion: string; model: string; globalSummary: string; warnings: string[];
@@ -24,11 +24,17 @@ export interface PlanningSessionSummary {
 export interface CalendarEventPreviewItem {
   sourceType: 'task' | 'routine'; sourceId: string; title: string;
   start: string; end: string; blockIndex: number; durationMinutes: number;
+  calendarState?: 'not_created' | 'writing' | 'write_failed' | 'active' | 'deleted';
 }
 
 export interface PlanningCalendarEventPreview {
   sessionId: string; status: 'approved'; windowStart: string; windowEnd: string;
-  timeZone: 'Asia/Tokyo'; events: CalendarEventPreviewItem[];
+  timeZone: 'Asia/Tokyo'; calendarId: string | null; events: CalendarEventPreviewItem[];
+}
+
+export interface PlanningCalendarEventManagementPreview {
+  sessionId: string; status: 'approved' | 'superseded'; timeZone: 'Asia/Tokyo'; calendarId: string;
+  events: CalendarEventPreviewItem[];
 }
 
 export type CalendarEventWriteStatus = 'created' | 'already_created' | 'failed' | 'in_progress' | 'not_attempted';
@@ -43,6 +49,20 @@ export interface PlanningCalendarWriteResult {
   sessionId: string; calendarId: string; status: 'completed' | 'partial' | 'failed';
   createdCount: number; alreadyCreatedCount: number; failedCount: number; inProgressCount: number; notAttemptedCount: number;
   needsReconnect: boolean; events: PlanningCalendarEventWriteItem[];
+}
+
+export type CalendarEventMutationOperation = 'update' | 'delete';
+export type CalendarEventMutationStatus = 'updated' | 'already_current' | 'deleted' | 'already_deleted' | 'failed' | 'in_progress' | 'not_attempted';
+
+export interface PlanningCalendarEventMutationItem extends CalendarEventPreviewItem {
+  mutationStatus: CalendarEventMutationStatus;
+  errorCode: 'CALENDAR_EVENT_NOT_FOUND' | 'CALENDAR_EVENT_MISMATCH' | 'CALENDAR_EVENT_CONFLICT' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_WRITE_FAILED' | null;
+}
+
+export interface PlanningCalendarEventMutationResult {
+  sessionId: string; calendarId: string; operation: CalendarEventMutationOperation; status: 'completed' | 'partial' | 'failed';
+  changedCount: number; unchangedCount: number; failedCount: number; inProgressCount: number; notAttemptedCount: number;
+  needsReconnect: boolean; events: PlanningCalendarEventMutationItem[];
 }
 
 export interface PlanningAdviceCandidate {

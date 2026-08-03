@@ -77,7 +77,7 @@
 - [x] Calendar書き込み直前の完全再検証
 - [x] 部分成功を保持し失敗blockだけ再試行する方針
 - [x] audit_logs
-- [ ] 作成済み予定の更新・削除
+- [x] 作成済み予定のcanonical再同期・削除（個別確認、所有マーカー・ETag検証、block単位冪等性）
 - [ ] V2 rollout完了後、旧create_planning_session RPCを別Migrationでrevoke / drop
 
 ## Milestone 6 — Execution and review
@@ -91,4 +91,5 @@
 
 ## Current task
 
-承認済みV2 Planning SessionのGoogle Calendar追加まで。次は作成済み予定の更新・削除を別の承認フローで設計する。
+承認済みV2 Planning SessionのGoogle Calendar追加・canonical再同期・削除まで。旧`create_planning_session` RPCの
+revoke/dropと、非本番DBでの真の並列transaction実証は別タスクとして残す。

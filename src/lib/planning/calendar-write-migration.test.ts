@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync('supabase/migrations/20260803000100_google_calendar_write.sql', 'utf8');
 const eventIdValidationFix = readFileSync('supabase/migrations/20260803000200_fix_google_event_id_validation.sql', 'utf8');
+const eventManagement = readFileSync('supabase/migrations/20260803000300_google_calendar_event_management.sql', 'utf8');
 const route = readFileSync('src/app/api/planning/sessions/[id]/write-to-calendar/route.ts', 'utf8');
 const server = readFileSync('src/lib/planning/server.ts', 'utf8');
 
@@ -63,4 +64,30 @@ describe('Google Calendar write migration', () => {
 describe('Google Calendar write static boundary', () => {
   it('POST bodyからCalendar IDだけを受け、title・blocksをserver生成する', () => { expect(route).toContain('planningCalendarWriteTarget(body)'); expect(route).not.toMatch(/body\.(title|blocks|events)/); expect(server).toContain('title: event.title'); });
   it('Preview関数の結果を受け取らずwrite内で完全再検証する', () => { expect(server).toMatch(/writePlanningSessionToCalendar[\s\S]*validatePlanningCalendarCandidate/); expect(server).not.toMatch(/writePlanningSessionToCalendar\([^)]*preview/i); });
+});
+
+describe('Google Calendar event management migration', () => {
+  it('event lifecycleと更新・削除のlease状態をblock単位で保持', () => {
+    for (const column of ['calendar_event_state', 'calendar_mutation_status', 'calendar_mutation_attempt_token', 'calendar_mutation_lease_until', 'calendar_mutation_attempt_count', 'calendar_mutation_error_code', 'calendar_updated_at', 'calendar_deleted_at']) expect(eventManagement).toContain(column);
+    expect(eventManagement).toContain("calendar_event_state in ('pending','active','deleted')");
+    expect(eventManagement).toContain("calendar_mutation_status in ('idle','updating','deleting','update_failed','delete_failed')");
+  });
+  it('mutation予約はauth.uidだけを使いSession・block・time_blockをlockして再確認', () => {
+    const signature = eventManagement.slice(eventManagement.indexOf('create function public.reserve_calendar_event_mutation('), eventManagement.indexOf('returns jsonb', eventManagement.indexOf('create function public.reserve_calendar_event_mutation(')));
+    expect(signature).not.toMatch(/user_id/i); expect(eventManagement).toContain('current_user_id uuid := (select auth.uid())');
+    expect(eventManagement).toMatch(/from public\.planning_sessions[\s\S]*for update;/);
+    expect(eventManagement).toMatch(/from public\.time_blocks[\s\S]*for update;/);
+    expect(eventManagement).toContain("p_operation = 'update' and session_record.status <> 'approved'");
+    expect(eventManagement).toContain("p_operation = 'delete' and session_record.status not in ('approved','superseded')");
+  });
+  it('更新・削除結果とauditを同じtransactionで確定しRPCだけを公開', () => {
+    expect(eventManagement).toContain('calendar_event_update_succeeded'); expect(eventManagement).toContain('calendar_event_update_failed');
+    expect(eventManagement).toContain('calendar_event_delete_succeeded'); expect(eventManagement).toContain('calendar_event_delete_failed');
+    expect(eventManagement).toContain('insert into public.audit_logs'); expect(eventManagement).not.toMatch(/commit|rollback/i);
+    expect(eventManagement).toContain('revoke all on function public.reserve_calendar_event_mutation(uuid, uuid, text, bigint, text) from public, anon, authenticated');
+    expect(eventManagement).toContain('grant execute on function public.complete_calendar_event_mutation(uuid, uuid, boolean, text, jsonb) to authenticated');
+  });
+  it('削除済みeventをcreate APIが暗黙に再作成しない', () => {
+    expect(eventManagement).toContain("write_record.calendar_event_state = 'deleted'"); expect(eventManagement).toContain("'result', 'EVENT_DELETED'");
+  });
 });

@@ -32,7 +32,11 @@ describe('server-owned generation and authorization', () => {
   it('生成POSTはrequest bodyを受け取らない', () => { expect(sessionsRoute).not.toContain('.json('); expect(sessionsRoute).not.toContain('user_id'); });
   it('sessionとblock取得にuser_id条件を併用する', () => { expect(serverSource).toContain(".eq('id', id).eq('user_id', userId)"); expect(serverSource).toContain(".eq('planning_session_id', id).eq('user_id', userId)"); });
   it('Google未接続は空eventとwarningへ正規化する', () => expect(serverSource).toContain("events: [], warningCodes: ['CALENDAR_NOT_CONNECTED']"));
-  it('Calendar書き込みやservice roleを利用しない', () => { expect(serverSource).not.toMatch(/service.?role/i); expect(serverSource).not.toMatch(/insertGoogle|updateGoogle|deleteGoogle/); });
+  it('計画生成はCalendar書き込みやservice roleを利用しない', () => {
+    expect(serverSource).not.toMatch(/service.?role/i);
+    const generation = serverSource.slice(serverSource.indexOf('export async function createPlanningSession('), serverSource.indexOf('function summaryData('));
+    expect(generation).not.toMatch(/createGoogle|updateGoogle|deleteGoogle/);
+  });
 });
 
 describe('safe API responses', () => {
