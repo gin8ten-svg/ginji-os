@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync('supabase/migrations/20260803000100_google_calendar_write.sql', 'utf8');
+const eventIdValidationFix = readFileSync('supabase/migrations/20260803000200_fix_google_event_id_validation.sql', 'utf8');
 const route = readFileSync('src/app/api/planning/sessions/[id]/write-to-calendar/route.ts', 'utf8');
 const server = readFileSync('src/lib/planning/server.ts', 'utf8');
 
@@ -10,7 +11,14 @@ describe('Google Calendar write migration', () => {
     expect(migration).toContain('create table public.time_blocks');
     for (const column of ['planning_block_id', 'google_calendar_id', 'google_event_id', 'calendar_write_status', 'calendar_write_attempt_token', 'calendar_write_lease_until', 'calendar_write_attempt_count', 'calendar_write_error_code', 'written_at']) expect(migration).toContain(column);
     expect(migration).toContain('unique (planning_block_id)'); expect(migration).toContain('unique (user_id, google_calendar_id, google_event_id)');
-    expect(migration).toContain("google_event_id ~ '^[0-9a-v]{5,1024}$'");
+  });
+  it('event IDはPostgreSQLの正規表現反復上限に触れず文字種と長さを検証', () => {
+    expect(eventIdValidationFix).toContain('drop constraint if exists time_blocks_google_event_id_check');
+    expect(eventIdValidationFix).toContain('length(google_event_id) between 5 and 1024');
+    expect(eventIdValidationFix).toContain("google_event_id ~ '^[0-9a-v]+$'");
+    expect(eventIdValidationFix).toContain('length(p_google_event_id) not between 5 and 1024');
+    expect(eventIdValidationFix).toContain("p_google_event_id !~ '^[0-9a-v]+$'");
+    expect(eventIdValidationFix).not.toContain('{5,1024}');
   });
   it('Session・Block・userの複合所有関係とCASCADEをDBで固定', () => {
     expect(migration).toContain('unique (id, planning_session_id, user_id)');
