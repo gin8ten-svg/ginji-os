@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { CalendarEventPreview } from '@/components/calendar-event-preview';
 import { getCalendarConnection, getCalendarEvents } from '@/lib/calendar/client';
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
 import { PlanningIdempotencyKey, PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
@@ -16,7 +17,7 @@ const fullDate = (value: string) => new Intl.DateTimeFormat('ja-JP', { timeZone:
 const statusText: Record<PlanningSessionStatus, string> = { draft: '下書き', approved: '承認済み', rejected: '却下済み', superseded: '更新済み' };
 
 function localDetail(result: PlanningResult): PlanningSessionDetail {
-  return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, inputHash: '', engineVersion: 'deterministic-v1', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null };
+  return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, engineVersion: 'deterministic-v2', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null };
 }
 
 export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isAuthenticated: boolean }) {
@@ -113,6 +114,7 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
       {session.status === 'draft' && !stale ? <div className="flex flex-wrap gap-2">{isAuthenticated ? <button type="button" disabled={loading} onClick={() => void consultAI()} className="min-h-11 rounded-full bg-indigo-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? 'AIに相談中…' : 'AIに改善案を相談'}</button> : null}<button type="button" disabled={loading} onClick={() => setConfirming(true)} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">計画案を承認</button><button type="button" disabled={loading} onClick={() => void reject()} className="min-h-11 rounded-full bg-rose-50 px-4 font-semibold text-rose-700 disabled:opacity-50">却下</button></div> : null}
       {session.approvedAt ? <p className="text-sm text-emerald-800">承認日時: {fullDate(session.approvedAt)}。Google Calendarは未書き込みです。</p> : null}
       {session.status === 'approved' ? <p className="text-sm font-medium text-emerald-800">承認済み計画は変更されません。再計算すると新しい下書きを作成します。</p> : null}
+      {isAuthenticated && session.status === 'approved' ? <CalendarEventPreview key={session.sessionId} sessionId={session.sessionId} onStale={() => setStale(true)} onReplan={() => void calculate()} /> : null}
       <div className="grid gap-3 lg:grid-cols-2">{Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([date, blocks]) => <section key={date} className="rounded-2xl border border-slate-200 p-3"><h4 className="font-semibold">{date}</h4><div className="mt-2 space-y-2">{blocks.map((block) => <Block key={block.id} block={block} />)}</div></section>)}</div>
       {session.unscheduledTasks.length ? <section className="rounded-2xl bg-amber-50 p-4"><h4 className="font-semibold">配置できなかったタスク</h4>{session.unscheduledTasks.map((item) => <p key={item.taskId} className="mt-2 text-sm">{item.title} — {item.reason}</p>)}</section> : null}
     </div> : null}

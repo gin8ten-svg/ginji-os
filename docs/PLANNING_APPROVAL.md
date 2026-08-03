@@ -3,8 +3,9 @@
 ## Lifecycle
 
 サーバーは認証ユーザーの現在データだけを取得し、決定論的Planning Engineを実行して `draft` を保存する。
-ユーザーは下書きを明示的に `approved` または `rejected` にできる。別の下書きを承認すると、残る下書きは
-原子的なDB関数内で `superseded` になる。承認済み計画を暗黙に変更しない。
+ユーザーは下書きを明示的に `approved` または `rejected` にできる。別の下書きを承認すると、残る下書きと、
+新しいSessionのhalf-open window `[window_start, window_end)` に重複する既存の承認済みSessionは、原子的な
+DB関数内で `superseded` になる。重複しない承認済みSessionは変更しない。
 
 未ログイン時は同じEngineを端末内で利用できるが、Planning SessionをSupabaseへ保存しない。Local承認は
 その画面・端末だけの確認状態であり、Cloud Sessionとは別物である。
@@ -26,6 +27,11 @@ hash再計算では生成時の `input_now` を維持して決定論性を保つ
 作成から24時間以上、Planning Window終了後、終了済みブロック、または開始から5分を超えたブロックを含む
 Sessionは `PLAN_STALE` として承認しない。
 
+新規Sessionでは `planning-input-v2` snapshotへTask/Routineのcanonical titleも保存し、snapshot全体からhashを
+生成する。承認前に保存snapshot自体のschema・許可field・hashを検査し、現在のserver inputからV2を再生成する。
+snapshot列はdraft中も不変で、API responseには含めない。snapshot列がnullのlegacy draftは自動補完せず、
+新しい計画案の作成を要求する。
+
 ## Authorization and API safety
 
 - 全APIはSupabase Authのユーザーをサーバーで取得する。
@@ -39,7 +45,9 @@ Sessionは `PLAN_STALE` として承認しない。
 
 Session生成RPCはSessionとblocksを単一transactionで保存する。Session snapshotの入力hash、Engine version、期間、
 基準時刻、summary、warning、作成日時、idempotency keyは生成後に変更できない。`draft` から許可するstatus遷移は
-`approved`、`rejected`、`superseded` だけで、terminal SessionはUPDATEできず、authenticated利用者は直接DELETEできない。承認・却下時刻はDB時刻で確定する。
+`approved`、`rejected`、`superseded` だけとする。terminal Sessionのsnapshot fieldは変更できず、唯一の追加遷移として
+承認RPC内の重複window解消時だけ `approved → superseded` を許可する。この遷移でも元の `approved_at` とblocksを保持する。
+authenticated利用者はSessionを直接UPDATE・DELETEできず、承認・却下時刻はDB時刻で確定する。
 
 planning_blocksは親Sessionがdraftの間だけINSERT・UPDATEできる。terminal親のblock追加、削除、時刻、参照先、
 順序、duration、metadata変更はRLSとtriggerの両方で拒否する。start/endは秒・ミリ秒を含まない分境界とし、
@@ -58,20 +66,20 @@ Session/blockのDELETE triggerは設けず、RLS policyにも副作用関数を�
 
 ## AI and Calendar boundary
 
-外部AI providerは任意のAdvice生成だけに限定し、Google Calendar書き込みAPIは存在しない。`PlanningAdvisor` は最小化したID、順序、
+外部AI providerは任意のAdvice生成だけに限定する。Google Calendar書き込みはAIから分離したserver-only APIで行う。`PlanningAdvisor` は最小化したID、順序、
 集計だけを扱い、未知IDを破棄できる。AI助言だけで承認することはできず、決定論的Engineが最終検証者である。
 
 OpenAI Adviceを利用する場合も、元のdeterministic draftは変更せず新しいdraftを作る。承認時にAIを再度
 呼び出さず、保存済みのsanitize済み順序を現在所有するentityだけへ絞り、hard priority bandとEngineで
 再配置して保存blocksと比較する。AI responseや説明だけでapprovedへ遷移しない。
 
-`planning_sessions.status = approved` だけでは、将来のGoogle Calendar書き込み許可として十分ではない。
+`planning_sessions.status = approved` だけでは、Google Calendar書き込み許可として十分ではない。
 書き込みAPIは書き込み直前に、認証ユーザー、Session所有権、approved状態、現在入力、input_hash、実時刻鮮度、
 Planning Engine再実行、保存blocksとのcanonical比較、対象Calendar、ユーザーの最終確認をすべて再検証する。
 approvedだけを条件にGoogle APIを呼ばず、現在のapprove RPCを単独の権限境界として利用しない。
 
-書き込みは別の冪等APIとし、部分成功、再試行、重複防止を監査記録へ残す。現在はwrite scope、Google Event ID、
-書き込み用tableを追加しない。
+書き込みは別の冪等APIとし、決定論的Google Event IDとblock単位の`time_blocks`状態で重複を防ぐ。部分成功は残し、
+失敗分だけを再試行可能にして、成功・失敗を`audit_logs`へ記録する。詳細は `docs/GOOGLE_CALENDAR_WRITE.md` を参照する。
 
 ## Deferred verification
 

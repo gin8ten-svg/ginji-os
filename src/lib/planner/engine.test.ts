@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlanningResult, calculateFreeSlots, comparePlanningTasks, createPlanningWindow, googleEventsToBusyIntervals, mergeBusyIntervals } from '@/lib/planner/engine';
+import { buildPlanningResult, calculateFreeSlots, comparePlanningTasks, createPlanningWindow, googleEventsToBusyIntervals, mergeBusyIntervals, planningPriorityBand } from '@/lib/planner/engine';
 import type { ExternalCalendarEvent } from '@/types/calendar';
 import type { BusyInterval } from '@/types/planning';
 import type { Routine, Task } from '@/types/tasks';
@@ -58,6 +58,45 @@ describe('Deterministic task and routine placement', () => {
   it('期限超過→期限→優先度→remaining→createdAtで並べる', () => {
     const values = [task({ id: 'low', title: 'low', dueAt: iso('2026-07-16', '18:00'), priority: 1 }), task({ id: 'high', title: 'high', dueAt: iso('2026-07-16', '18:00'), priority: 5 }), task({ id: 'overdue', title: 'overdue', dueAt: iso('2026-07-14', '18:00') })];
     expect(values.sort((a, b) => comparePlanningTasks(a, b, now)).map((item) => item.id)).toEqual(['overdue', 'high', 'low']);
+  });
+
+  it('同日中に締切時刻を過ぎてもoverdueにせずtodayのbandを維持する（classifyTaskと同じ日付単位）', () => {
+    expect(planningPriorityBand({ kind: 'task', dueAt: iso('2026-07-15', '08:00') }, now)).toBe(2);
+    expect(planningPriorityBand({ kind: 'task', dueAt: iso('2026-07-14', '18:00') }, now)).toBe(1);
+  });
+
+  it('締切時刻を過ぎた当日タスクを翌日以降ではなく本日中に配置する', () => {
+    const result = buildPlanningResult({ now, events: [], tasks: [task({ id: 'passed-today', title: 'passed-today', dueAt: iso('2026-07-15', '08:00'), remainingMinutes: 30 })], routines: [], completions: [] });
+    const block = result.proposedBlocks.find((item) => item.taskId === 'passed-today');
+    expect(block?.start.startsWith('2026-07-15')).toBe(true);
+  });
+
+  it('締切時刻を過ぎた当日タスクを本日中に置けなければ翌日へ期限後配置しない', () => {
+    const result = buildPlanningResult({
+      now,
+      events: [event('today-full', iso('2026-07-15', '09:00'), iso('2026-07-15', '22:00'))],
+      tasks: [task({ id: 'passed-today-full', title: 'passed-today-full', dueAt: iso('2026-07-15', '08:00'), remainingMinutes: 30 })],
+      routines: [],
+      completions: [],
+    });
+    expect(result.proposedBlocks.some((item) => item.taskId === 'passed-today-full')).toBe(false);
+    expect(result.unscheduledTasks[0]?.taskId).toBe('passed-today-full');
+  });
+
+  it('orderingOverrideがあってもband1(前日以前overdue)はband2(当日締切時刻超過)より先に配置される', () => {
+    const result = buildPlanningResult({
+      now,
+      events: [],
+      tasks: [
+        task({ id: 'yesterday-overdue', title: 'yesterday-overdue', dueAt: iso('2026-07-14', '18:00'), remainingMinutes: 30, splittable: false }),
+        task({ id: 'today-passed', title: 'today-passed', dueAt: iso('2026-07-15', '08:00'), remainingMinutes: 30, splittable: false }),
+      ],
+      routines: [],
+      completions: [],
+      orderingOverride: ['task:today-passed', 'task:yesterday-overdue'],
+    });
+    const sorted = result.proposedBlocks.filter((item) => item.source === 'task').sort((a, b) => a.start.localeCompare(b.start));
+    expect(sorted[0].taskId).toBe('yesterday-overdue');
   });
 
   it('分割可能タスクをminimumBlockMinutes以上で分割しremainingMinutesだけ配置する', () => {

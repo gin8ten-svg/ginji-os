@@ -27,7 +27,9 @@ export async function calendarAccessContext() {
   if (!context.connection) return { ok: false, response: calendarJson({ error: 'Google Calendarが未接続です。', code: 'NOT_CONNECTED' }, 409) } as const;
   if (context.connection.needs_reconnect) return { ok: false, response: calendarJson({ error: 'Google Calendarへの再接続が必要です。', code: 'RECONNECT_REQUIRED', needsReconnect: true }, 409) } as const;
   try {
-    const refreshToken = decryptRefreshToken(context.connection.encrypted_refresh_token);
+    const { data: encryptedToken, error: tokenError } = await context.client.rpc('get_calendar_connection_token');
+    if (tokenError || !encryptedToken) throw new CalendarStoredTokenError('Stored calendar authorization is missing.');
+    const refreshToken = decryptRefreshToken(encryptedToken);
     const accessToken = await refreshGoogleAccessToken(refreshToken);
     return { ...context, ok: true, connection: context.connection, accessToken } as const;
   } catch (error) {

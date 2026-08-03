@@ -59,6 +59,7 @@
 - [x] Planning Session保存・stale検出・明示承認/却下
 - [x] AI-ready助言interface（外部providerなし）
 - [x] Planning Session生成のIdempotency-Key・原子的保存・重複request排除
+- [x] Planning Input Snapshot V2とtitle整合性基盤（Migration適用・動作確認済み、2026/07/31）
 - [x] AI AdviceのDB原子rate limit
 - [ ] AI Adviceの利用量監視
 - [ ] 手動編集
@@ -67,15 +68,17 @@
 ## Milestone 5 — Calendar write
 
 - [ ] 承認画面
-- [ ] Googleイベント作成
-- [ ] 冪等性
+- [x] V2 Migration適用・動作確認後にGoogle Calendar Event Previewを実装
+- [x] Googleイベント作成
+- [x] block単位の冪等性（DB状態 + 決定論的Google Event ID）
 - [x] approved/rejected/superseded SessionとblockのDB不変化
 - [ ] 非本番DBでBlock DELETE RPC対Approvalの真の並列transactionとauth.users CASCADE削除を実証
 - [x] duration_minutesとstart/endのDB整合制約
-- [ ] Calendar書き込み直前の完全再検証
-- [ ] 失敗時ロールバック方針
-- [ ] audit_logs
+- [x] Calendar書き込み直前の完全再検証
+- [x] 部分成功を保持し失敗blockだけ再試行する方針
+- [x] audit_logs
 - [ ] 作成済み予定の更新・削除
+- [ ] V2 rollout完了後、旧create_planning_session RPCを別Migrationでrevoke / drop
 
 ## Milestone 6 — Execution and review
 
@@ -88,4 +91,4 @@
 
 ## Current task
 
-Planning Session承認基盤まで。次は監査後に、承認済みSessionだけを入力にするCalendar書き込み設計。
+承認済みV2 Planning SessionのGoogle Calendar追加まで。次は作成済み予定の更新・削除を別の承認フローで設計する。

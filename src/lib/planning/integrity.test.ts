@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const migration = readFileSync('supabase/migrations/20260715000700_planning_integrity_hardening.sql', 'utf8');
 const raceMigration = readFileSync('supabase/migrations/20260715000800_planning_approval_race_fix.sql', 'utf8');
 const deleteMigration = readFileSync('supabase/migrations/20260715000900_planning_block_delete_rpc.sql', 'utf8');
+const approvedWindowMigration = readFileSync('supabase/migrations/20260731000100_prevent_overlapping_approved_planning_sessions.sql', 'utf8');
 const client = readFileSync('src/lib/planning/client.ts', 'utf8');
 const server = readFileSync('src/lib/planning/server.ts', 'utf8');
 const publicTypes = readFileSync('src/types/planning-session.ts', 'utf8');
@@ -82,6 +83,46 @@ describe('planning approval race correction migration', () => {
   it('不要なSession write policyを削除しSELECT policyは維持', () => {
     for (const policy of ['planning_sessions_insert_own', 'planning_sessions_update_own', 'planning_sessions_delete_own']) expect(raceMigration).toContain(`drop policy if exists ${policy}`);
     expect(raceMigration).not.toContain('drop policy planning_sessions_select_own');
+  });
+});
+
+describe('approved planning window overlap prevention migration', () => {
+  it('既存重複を新しい承認を優先してsupersededへ移行', () => {
+    expect(approvedWindowMigration).toContain('update public.planning_sessions as older');
+    expect(approvedWindowMigration).toContain("older.status = 'approved'");
+    expect(approvedWindowMigration).toContain('older.window_start < newer.window_end');
+    expect(approvedWindowMigration).toContain('newer.window_start < older.window_end');
+    expect(approvedWindowMigration).toContain('coalesce(newer.approved_at, newer.created_at)');
+  });
+  it('approvedだけにhalf-open windowのDB排他制約を設定', () => {
+    expect(approvedWindowMigration).toContain('planning_sessions_no_overlapping_approved_windows');
+    expect(approvedWindowMigration).toContain("tstzrange(window_start, window_end, '[)') with &&");
+    expect(approvedWindowMigration).toContain("where (status = 'approved')");
+  });
+  it('同一ユーザーの承認をtransaction lockで直列化してから重複approvedを先にsupersede', () => {
+    const lock = approvedWindowMigration.indexOf('pg_catalog.pg_advisory_xact_lock(');
+    const supersedeApproved = approvedWindowMigration.indexOf("and status = 'approved'", lock);
+    const approveTarget = approvedWindowMigration.indexOf("set status = 'approved'", supersedeApproved);
+    expect(lock).toBeGreaterThan(0);
+    expect(supersedeApproved).toBeGreaterThan(lock);
+    expect(approveTarget).toBeGreaterThan(supersedeApproved);
+    expect(approvedWindowMigration).toContain("'planning-approval:' || current_user_id::text");
+    expect(approvedWindowMigration).toMatch(/where id = p_session_id and user_id = current_user_id\s+for update;/);
+    expect(approvedWindowMigration).toContain('window_start < session_window_end');
+    expect(approvedWindowMigration).toContain('session_window_start < window_end');
+  });
+  it('approvedからsupersededだけを許可し承認時刻とrevisionを保持', () => {
+    expect(approvedWindowMigration).toContain("old.status = 'approved' and new.status = 'superseded'");
+    expect(approvedWindowMigration).toContain("if new.status <> 'superseded'");
+    expect(approvedWindowMigration).toContain('new.blocks_revision is distinct from old.blocks_revision');
+    expect(approvedWindowMigration).toContain('new.approved_at := old.approved_at');
+  });
+  it('RPCはuser_id引数を持たずauthenticatedだけが実行可能', () => {
+    const signature = approvedWindowMigration.slice(approvedWindowMigration.indexOf('create or replace function public.approve_planning_session('), approvedWindowMigration.indexOf('returns text'));
+    expect(signature).not.toMatch(/user_id/i);
+    expect(approvedWindowMigration).toContain('current_user_id uuid := (select auth.uid())');
+    expect(approvedWindowMigration).toContain('revoke all on function public.approve_planning_session(uuid, text, bigint) from public, anon, authenticated');
+    expect(approvedWindowMigration).toContain('grant execute on function public.approve_planning_session(uuid, text, bigint) to authenticated');
   });
 });
 

@@ -1,4 +1,4 @@
-import type { PlanningErrorCode, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
+import type { PlanningCalendarEventPreview, PlanningCalendarWriteResult, PlanningErrorCode, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
 
 export class PlanningClientError extends Error {
   constructor(readonly code: PlanningErrorCode, message: string, readonly status: number) { super(message); }
@@ -17,6 +17,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const createCloudPlanningSession = (idempotencyKey: string, signal?: AbortSignal) => request<PlanningSessionDetail>('/api/planning/sessions', { method: 'POST', signal, headers: { 'Idempotency-Key': idempotencyKey } });
 export const listCloudPlanningSessions = (signal?: AbortSignal) => request<{ sessions: PlanningSessionSummary[] }>('/api/planning/sessions', { signal });
 export const getCloudPlanningSession = (id: string, signal?: AbortSignal) => request<PlanningSessionDetail>(`/api/planning/sessions/${encodeURIComponent(id)}`, { signal });
+export const getCloudPlanningCalendarEventPreview = (id: string, signal?: AbortSignal) => request<PlanningCalendarEventPreview>(`/api/planning/sessions/${encodeURIComponent(id)}/calendar-preview`, { signal });
+export const writeCloudPlanningSessionToCalendar = (id: string, calendarId: string) => request<PlanningCalendarWriteResult>(`/api/planning/sessions/${encodeURIComponent(id)}/write-to-calendar`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ calendarId }) });
 export const approveCloudPlanningSession = (id: string) => request<PlanningSessionDetail>(`/api/planning/sessions/${encodeURIComponent(id)}/approve`, { method: 'POST' });
 export const rejectCloudPlanningSession = (id: string) => request<PlanningSessionDetail>(`/api/planning/sessions/${encodeURIComponent(id)}/reject`, { method: 'POST' });
 export const adviseCloudPlanningSession = (id: string, signal?: AbortSignal) => request<PlanningSessionDetail>(`/api/planning/sessions/${encodeURIComponent(id)}/advice`, { method: 'POST', signal });

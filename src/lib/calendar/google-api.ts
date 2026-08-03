@@ -3,11 +3,20 @@ import type { ExternalCalendarEvent, GoogleCalendarSummary } from '@/types/calen
 
 export class CalendarReconnectError extends Error {}
 export class CalendarServiceError extends Error {}
+export class CalendarEventAlreadyExistsError extends Error {}
 export class CalendarOAuthConfigurationError extends Error {}
 type Fetcher = typeof fetch;
 const MAX_PAGES = 20;
 const MAX_CALENDARS = 1_000;
 const MAX_EVENTS = 5_000;
+
+export interface GoogleCalendarEventWriteInput {
+  eventId: string; title: string; start: string; end: string; timeZone: 'Asia/Tokyo';
+}
+
+export interface GoogleCalendarWrittenEvent {
+  id: string; title: string; start: string; end: string; status: 'confirmed' | 'tentative' | 'cancelled'; writeKey: string | null;
+}
 
 function configured(name: 'GOOGLE_OAUTH_CLIENT_ID' | 'GOOGLE_OAUTH_CLIENT_SECRET'): string {
   const value = process.env[name];
@@ -63,7 +72,10 @@ export async function listGoogleCalendars(accessToken: string, selectedIds: read
     const items = Array.isArray(data.items) ? data.items : [];
     for (const item of items) {
       if (typeof item !== 'object' || item === null || !('id' in item) || typeof item.id !== 'string') continue;
-      calendars.push({ calendarId: item.id, summary: 'summary' in item && typeof item.summary === 'string' ? item.summary : '名称未設定', primary: 'primary' in item && item.primary === true, selected: selectedIds.includes(item.id), backgroundColor: 'backgroundColor' in item && typeof item.backgroundColor === 'string' ? item.backgroundColor : null });
+      const roleValue = 'accessRole' in item && typeof item.accessRole === 'string' ? item.accessRole : 'unknown';
+      const accessRole: GoogleCalendarSummary['accessRole'] = roleValue === 'freeBusyReader' || roleValue === 'reader' || roleValue === 'writerWithoutPrivateAccess' || roleValue === 'writer' || roleValue === 'owner' ? roleValue : 'unknown';
+      const writable = accessRole === 'writerWithoutPrivateAccess' || accessRole === 'writer' || accessRole === 'owner';
+      calendars.push({ calendarId: item.id, summary: 'summary' in item && typeof item.summary === 'string' ? item.summary : '名称未設定', primary: 'primary' in item && item.primary === true, selected: selectedIds.includes(item.id), backgroundColor: 'backgroundColor' in item && typeof item.backgroundColor === 'string' ? item.backgroundColor : null, accessRole, writable });
       if (calendars.length > MAX_CALENDARS) throw new CalendarServiceError('Google Calendarの取得件数が上限を超えました。');
     }
     pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : undefined;
@@ -78,6 +90,12 @@ export function validateCalendarSelection(requested: readonly string[], availabl
   const allowed = new Set(available.map((calendar) => calendar.calendarId));
   if (!unique.every((id) => allowed.has(id))) throw new CalendarServiceError('利用できないCalendarが含まれています。');
   return unique;
+}
+
+export function validateWritableCalendar(calendarId: string, available: readonly GoogleCalendarSummary[]): GoogleCalendarSummary {
+  const calendar = available.find((item) => item.calendarId === calendarId);
+  if (!calendar?.writable) throw new CalendarServiceError('書き込み可能なCalendarを選択してください。');
+  return calendar;
 }
 
 export function validateCalendarIdInput(value: unknown): string[] {
@@ -139,6 +157,56 @@ export async function listGoogleEvents(accessToken: string, calendarIds: readonl
     } while (pageToken);
   }
   return [...events.values()].sort((a, b) => a.start.localeCompare(b.start));
+}
+
+function normalizeWrittenGoogleEvent(value: unknown): GoogleCalendarWrittenEvent | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const item = value as Record<string, unknown>;
+  const startValue = typeof item.start === 'object' && item.start ? item.start as Record<string, unknown> : {};
+  const endValue = typeof item.end === 'object' && item.end ? item.end as Record<string, unknown> : {};
+  const extended = typeof item.extendedProperties === 'object' && item.extendedProperties ? item.extendedProperties as Record<string, unknown> : {};
+  const privateValue = typeof extended.private === 'object' && extended.private ? extended.private as Record<string, unknown> : {};
+  if (typeof item.id !== 'string' || typeof item.summary !== 'string' || typeof startValue.dateTime !== 'string' || typeof endValue.dateTime !== 'string') return null;
+  return { id: item.id, title: item.summary, start: startValue.dateTime, end: endValue.dateTime, status: item.status === 'cancelled' ? 'cancelled' : item.status === 'tentative' ? 'tentative' : 'confirmed', writeKey: typeof privateValue.ginjiEventId === 'string' ? privateValue.ginjiEventId : null };
+}
+
+async function googleEventWriteResponse(url: URL, accessToken: string, init: RequestInit, fetcher: Fetcher): Promise<Response> {
+  const response = await fetchWithTimeout(fetcher, url.toString(), { ...init, headers: { ...init.headers, authorization: `Bearer ${accessToken}` } });
+  if (response.status === 401 || response.status === 403) throw new CalendarReconnectError('Google Calendarへの再接続が必要です。');
+  return response;
+}
+
+export async function createGoogleCalendarEvent(calendarId: string, accessToken: string, input: GoogleCalendarEventWriteInput, fetcher: Fetcher = fetch): Promise<GoogleCalendarWrittenEvent> {
+  if (!/^[0-9a-v]{5,1024}$/.test(input.eventId) || !input.title || !Number.isFinite(Date.parse(input.start)) || !Number.isFinite(Date.parse(input.end)) || new Date(input.start) >= new Date(input.end)) throw new CalendarServiceError('作成するGoogle Calendar予定が不正です。');
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+  url.searchParams.set('sendUpdates', 'none');
+  const response = await googleEventWriteResponse(url, accessToken, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: input.eventId, summary: input.title, start: { dateTime: input.start, timeZone: input.timeZone }, end: { dateTime: input.end, timeZone: input.timeZone }, transparency: 'opaque', extendedProperties: { private: { ginjiEventId: input.eventId } } }),
+  }, fetcher);
+  if (response.status === 409) throw new CalendarEventAlreadyExistsError('同じGoogle Calendar予定がすでに存在します。');
+  if (!response.ok) throw new CalendarServiceError('Google Calendarへ予定を作成できませんでした。');
+  const event = normalizeWrittenGoogleEvent(await response.json().catch(() => null));
+  if (!event || event.id !== input.eventId) throw new CalendarServiceError('Google Calendarの作成応答が不正です。');
+  return event;
+}
+
+export async function getGoogleCalendarEvent(calendarId: string, eventId: string, accessToken: string, fetcher: Fetcher = fetch): Promise<GoogleCalendarWrittenEvent> {
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
+  const response = await googleEventWriteResponse(url, accessToken, { method: 'GET' }, fetcher);
+  if (!response.ok) throw new CalendarServiceError('既存のGoogle Calendar予定を確認できませんでした。');
+  const event = normalizeWrittenGoogleEvent(await response.json().catch(() => null));
+  if (!event) throw new CalendarServiceError('Google Calendarの予定応答が不正です。');
+  return event;
+}
+
+export function googleCalendarEventMatchesWriteInput(event: GoogleCalendarWrittenEvent, input: GoogleCalendarEventWriteInput): boolean {
+  return event.id === input.eventId
+    && event.writeKey === input.eventId
+    && event.status !== 'cancelled'
+    && event.title === input.title
+    && new Date(event.start).getTime() === new Date(input.start).getTime()
+    && new Date(event.end).getTime() === new Date(input.end).getTime();
 }
 
 export async function revokeGoogleToken(token: string, fetcher: Fetcher = fetch, timeoutMs = 10_000): Promise<boolean> {

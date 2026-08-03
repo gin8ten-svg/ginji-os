@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assertPlanningIdempotencyKey, assertPlanningSessionId } from '@/lib/planning/validation';
+import { assertPlanningIdempotencyKey, assertPlanningSessionId, planningCalendarWriteTarget } from '@/lib/planning/validation';
 
 const { authenticatedPlanningClient } = vi.hoisted(() => ({ authenticatedPlanningClient: vi.fn() }));
 vi.mock('@/lib/planning/server', () => ({
@@ -10,6 +10,7 @@ vi.mock('@/lib/planning/server', () => ({
   createAdvisedPlanningSession: vi.fn(),
   createPlanningSession: vi.fn(),
   listPlanningSessions: vi.fn(),
+  writePlanningSessionToCalendar: vi.fn(),
 }));
 
 import { GET } from '@/app/api/planning/sessions/[id]/route';
@@ -17,6 +18,7 @@ import { POST as approve } from '@/app/api/planning/sessions/[id]/approve/route'
 import { POST as reject } from '@/app/api/planning/sessions/[id]/reject/route';
 import { POST as advice } from '@/app/api/planning/sessions/[id]/advice/route';
 import { POST as create } from '@/app/api/planning/sessions/route';
+import { POST as writeToCalendar } from '@/app/api/planning/sessions/[id]/write-to-calendar/route';
 
 describe('planning session UUID validation', () => {
   it('標準UUIDを受け入れる', () => expect(() => assertPlanningSessionId('11111111-1111-4111-8111-111111111111')).not.toThrow());
@@ -29,12 +31,25 @@ describe('planning session UUID validation', () => {
     ['approve', approve],
     ['reject', reject],
     ['advice', advice],
+    ['write-to-calendar', writeToCalendar],
   ])('%s routeは不正UUIDをDB・認証へ渡さない', async (_name, handler) => {
     authenticatedPlanningClient.mockClear();
     const response = await handler(new Request('http://localhost/api/planning/sessions/bad'), { params: Promise.resolve({ id: 'bad' }) });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: 'INVALID_REQUEST', error: '計画案IDの形式が正しくありません。' });
     expect(authenticatedPlanningClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('planning Calendar write target validation', () => {
+  it('calendarIdだけを受け入れ、title・blockなどの追加入力を拒否する', () => {
+    expect(planningCalendarWriteTarget({ calendarId: 'primary' })).toBe('primary');
+    for (const value of [{}, { calendarId: '' }, { calendarId: ' primary' }, { calendarId: 'primary', title: 'client-title' }, { calendarId: ['primary'] }]) expect(() => planningCalendarWriteTarget(value)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+  });
+  it('不正bodyは認証・DBより前に拒否する', async () => {
+    authenticatedPlanningClient.mockClear();
+    const response = await writeToCalendar(new Request('http://localhost/api/planning/sessions/11111111-1111-4111-8111-111111111111/write-to-calendar', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ calendarId: 'primary', title: 'client-title' }) }), { params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111111' }) });
+    expect(response.status).toBe(400); expect(authenticatedPlanningClient).not.toHaveBeenCalled();
   });
 });
 

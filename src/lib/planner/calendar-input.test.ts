@@ -4,7 +4,7 @@ import { PlanningIdempotencyKey, PlanningRequestCoordinator, resolvePlanningCale
 import { createPlanningWindow } from '@/lib/planner/engine';
 
 const window = createPlanningWindow(new Date('2026-07-15T00:00:00.000Z'));
-const status = (connected: boolean, needsReconnect = false) => ({ connected, needsReconnect, connectedAt: null, selectedCalendarIds: [] });
+const status = (connected: boolean, needsReconnect = false) => ({ connected, needsReconnect, connectedAt: null, selectedCalendarIds: [], canWriteEvents: false });
 const dependencies = (connection = status(true), events: never[] = []) => ({ getConnection: vi.fn(async () => connection), getEvents: vi.fn(async () => ({ events })) });
 
 describe('Planning Calendar input policy', () => {

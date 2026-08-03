@@ -20,9 +20,10 @@ describe('authCallbackUrl', () => {
     expect(normalGoogleOAuthOptions('https://app.example')).not.toHaveProperty('scopes');
   });
 
-  it('Calendar接続時だけread-only scopeとoffline同意を要求する', () => {
+  it('Calendar接続時だけ予定追加scopeとCalendar一覧read-only scope、offline同意を要求する', () => {
     const options = calendarGoogleOAuthOptions('https://app.example');
-    expect(options.scopes).toContain('calendar.events.readonly');
+    expect(options.scopes).toContain('calendar.events');
+    expect(options.scopes).not.toContain('calendar.events.readonly');
     expect(options.scopes).toContain('calendar.calendarlist.readonly');
     expect(options.queryParams).toEqual({ access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true' });
   });

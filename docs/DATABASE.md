@@ -84,15 +84,17 @@ Supabase Authのユーザーに紐づく設定。
 
 | Column | Type | Notes |
 |---|---|---|
-| id | uuid | PK |
-| user_id | uuid | |
-| provider | text | google |
-| provider_account_id | text | |
-| access_token_encrypted | text | server only |
-| refresh_token_encrypted | text | server only |
-| token_expires_at | timestamptz | |
-| created_at | timestamptz | |
+| user_id | uuid | PK, auth.users FK |
+| granted_scopes | text[] | |
+| selected_calendar_ids | text[] | |
+| needs_reconnect | boolean | |
+| connected_at | timestamptz | |
 | updated_at | timestamptz | |
+
+暗号化Refresh Tokenは`calendar_connections`に置かず、`calendar_connection_secrets`（`user_id`をPKとしてFK cascade）へ分離する。
+`anon`/`authenticated`へは直接のtable権限を一切付与せず、`save_calendar_connection(p_encrypted_refresh_token, p_granted_scopes)`と
+`get_calendar_connection_token()`のSECURITY DEFINER RPCだけを`authenticated`が実行できる。両RPCとも内部の`auth.uid()`だけで
+対象行を決定し、他ユーザーのTokenへは到達できない。
 
 ## planning_sessions
 
@@ -107,9 +109,14 @@ Supabase Authのユーザーに紐づく設定。
 | created_at | timestamptz |
 | approved_at | timestamptz |
 | idempotency_key | uuid nullable、user単位partial unique |
+| input_snapshot_version | text nullable、V2はplanning-input-v2 |
+| input_snapshot | jsonb nullable、server-only canonical input |
 
-terminal status（approved/rejected/superseded）の行はUPDATE・DELETE不能。snapshot列はdraft中も変更せず、
-status遷移だけを専用RPCで行う。生成は `create_planning_session` がblocksと同一transactionで保存する。
+terminal status（approved/rejected/superseded）のsnapshot列とblocksは変更不能。例外的に、新しいSessionの承認RPCだけが
+windowの重複するapprovedを、元のapproved_atを保持してsupersededへ遷移できる。approvedのhalf-open window重複は
+DB排他制約でも禁止する。利用者はSessionを直接UPDATE・DELETEできず、status遷移だけを専用RPCで行う。
+生成は `create_planning_session` がblocksと同一transactionで保存する。
+V2生成は互換性を保つ別RPC `create_planning_session_v2` を使用し、legacy行はsnapshot列をnullのまま維持する。
 
 ## planning_blocks
 
@@ -122,15 +129,29 @@ status遷移だけを専用RPCで行う。生成は `create_planning_session` �
 | id | uuid | PK |
 | user_id | uuid | |
 | task_id | uuid | nullable |
-| planning_session_id | uuid | nullable |
+| routine_id | uuid | nullable |
+| planning_session_id | uuid | required |
+| planning_block_id | uuid | required、unique |
 | start_at | timestamptz | |
 | end_at | timestamptz | |
 | status | text | proposed/approved/in_progress/completed/skipped |
 | source | text | manual/ai/google |
-| google_event_id | text | nullable |
+| google_calendar_id | text | required |
+| google_event_id | text | required、user/calendar/eventでunique |
+| calendar_write_status | text | writing/succeeded/failed |
+| calendar_write_attempt_token | uuid | writing中だけ保持 |
+| calendar_write_lease_until | timestamptz | writing中だけ保持 |
+| calendar_write_attempt_count | int | 1以上 |
+| calendar_write_error_code | text | failed時だけ保持 |
+| written_at | timestamptz | succeeded時だけ保持 |
 | actual_minutes | int | nullable |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
+
+`planning_block_id, planning_session_id, user_id` の複合FKでPlanning Block所有関係を固定する。1 blockは1つの
+Google Calendar/Event IDだけに対応する。認証ユーザーはown SELECTのみ可能で、mutationはSession行をlockして
+status/hash/revision/Calendarを再確認する `reserve_calendar_event_write` と、attempt tokenを照合して結果とauditを
+同一transactionで確定する `complete_calendar_event_write` だけを使う。
 
 ## audit_logs
 
@@ -145,6 +166,9 @@ status遷移だけを専用RPCで行う。生成は `create_planning_session` �
 | after_data | jsonb |
 | created_at | timestamptz |
 
+Calendar書き込みではactionを`calendar_event_write_succeeded`または`calendar_event_write_failed`、entity_typeを
+`time_block`として記録する。RLS下でown SELECTだけを許可し、直接mutationは許可しない。
+
 ## ai_advice_rate_limits
 
 AI相談の同一ユーザー並列実行をDB時刻で原子的に抑止するサーバー専用テーブル。`user_id` は
@@ -156,5 +180,4 @@ AI相談の同一ユーザー並列実行をDB時刻で原子的に抑止する�
 
 すべてのユーザー所有テーブル（routines、routine_completionsを含む）で、`auth.uid() = user_id` の行だけをSELECT、INSERT、UPDATE、DELETE可能にする。
 
-`calendar_connections` のトークン列は通常のクライアントクエリで取得させない。
-必要であれば別スキーマまたはサーバー専用テーブルへ分離する。
+暗号化Refresh Tokenは`calendar_connections`から`calendar_connection_secrets`へ分離済みで、通常のクライアントクエリでは取得できない。
