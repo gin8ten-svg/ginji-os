@@ -182,7 +182,7 @@ export async function listPlanningSessions(client: SupabaseClient<Database>, use
   return sessions.map((item) => ({ sessionId: item.id, status: item.status, windowStart: item.window_start, windowEnd: item.window_end, engineVersion: item.engine_version, warningCodes: item.warning_codes, createdAt: item.created_at, approvedAt: item.approved_at, blockCount: counts.get(item.id) ?? 0 }));
 }
 
-function normalizedBlocks(blocks: ProposedTimeBlock[]) { return blocks.map((item) => ({ source: item.source, sourceId: item.taskId ?? item.routineId, start: item.start, end: item.end, blockIndex: item.splitIndex, duration: Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 60_000) })).sort((a, b) => a.start.localeCompare(b.start) || String(a.sourceId).localeCompare(String(b.sourceId))); }
+function normalizedBlocks(blocks: ProposedTimeBlock[]) { return blocks.map((item) => ({ source: item.source, sourceId: item.taskId ?? item.routineId, start: new Date(item.start).toISOString(), end: new Date(item.end).toISOString(), blockIndex: item.splitIndex, duration: Math.round((new Date(item.end).getTime() - new Date(item.start).getTime()) / 60_000) })).sort((a, b) => a.start.localeCompare(b.start) || String(a.sourceId).localeCompare(String(b.sourceId))); }
 
 export function validateStoredPlan(blocks: ProposedTimeBlock[], current: PlanningResult, store: TaskStore): boolean {
   const entities = new Set([...store.tasks.filter((item) => !item.completedAt).map((item) => `task:${item.id}`), ...store.routines.filter((item) => item.isActive).map((item) => `routine:${item.id}`)]);
