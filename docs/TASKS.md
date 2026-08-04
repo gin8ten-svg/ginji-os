@@ -6,7 +6,7 @@
 - [x] ESLint設定
 - [x] 環境変数サンプル
 - [ ] 基本ディレクトリ作成
-- [ ] CIでlint/typecheck/build
+- [x] CIでlint/typecheck/test/build
 - [x] モバイル用アプリシェル
 
 ## Milestone 1 — Local UI prototype
