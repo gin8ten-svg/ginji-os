@@ -164,6 +164,15 @@ status/hash/revision/Calendarを再確認する `reserve_calendar_event_write` �
 作成済み予定の更新・削除は、同じ所有関係をlockする`reserve_calendar_event_mutation`と、attempt tokenを照合する
 `complete_calendar_event_mutation`だけを使う。削除済みeventは追加RPCから暗黙に再作成しない。
 
+タスクblockの完了と実績時間は`complete_planning_time_block`だけで更新する。RPCは`auth.uid()`から所有者を確定し、
+approvedまたはsuperseded Session、Google Calendar書き込み成功済みの`time_blocks`、参照先taskを同一transactionでlockする。
+初回完了時だけ予定block分をtaskの`remaining_minutes`から減らし、0分になったtaskを完了にする。完了済みblockの再送では
+残り時間を再度減らさず、`actual_minutes`が未記録の場合だけ後から実績値を追記できる。この操作はGoogle Calendarを変更しない。
+状態が変化する完了・実績記録は`time_block_completed`としてaudit_logsへ記録する。
+
+V2 snapshot移行前に承認済みだったSession（`input_snapshot_version`が`null`）は実行Previewの取得時にsnapshotの
+titleを使わず、`tasks`テーブルの現在のtitleへfallbackする。
+
 ## audit_logs
 
 | Column | Type |

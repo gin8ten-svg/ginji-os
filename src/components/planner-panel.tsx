@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CalendarEventPreview } from '@/components/calendar-event-preview';
+import { PlanningExecution } from '@/components/planning-execution';
 import { getCalendarConnection, getCalendarEvents } from '@/lib/calendar/client';
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
 import { PlanningIdempotencyKey, PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
@@ -20,7 +21,7 @@ function localDetail(result: PlanningResult): PlanningSessionDetail {
   return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, engineVersion: 'deterministic-v2', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null };
 }
 
-export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isAuthenticated: boolean }) {
+export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store: TaskStore; isAuthenticated: boolean; onTaskUpdated(): void }) {
   const [session, setSession] = useState<PlanningSessionDetail | null>(null);
   const [stale, setStale] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -115,6 +116,7 @@ export function PlannerPanel({ store, isAuthenticated }: { store: TaskStore; isA
       {session.approvedAt ? <p className="text-sm text-emerald-800">承認日時: {fullDate(session.approvedAt)}。Google Calendarは未書き込みです。</p> : null}
       {session.status === 'approved' ? <p className="text-sm font-medium text-emerald-800">承認済み計画は変更されません。再計算すると新しい下書きを作成します。</p> : null}
       {isAuthenticated && session.status === 'approved' ? <CalendarEventPreview key={session.sessionId} sessionId={session.sessionId} onStale={() => setStale(true)} onReplan={() => void calculate()} /> : null}
+      {isAuthenticated && (session.status === 'approved' || session.status === 'superseded') ? <PlanningExecution key={`execution:${session.sessionId}`} sessionId={session.sessionId} onTaskUpdated={onTaskUpdated} /> : null}
       <div className="grid gap-3 lg:grid-cols-2">{Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([date, blocks]) => <section key={date} className="rounded-2xl border border-slate-200 p-3"><h4 className="font-semibold">{date}</h4><div className="mt-2 space-y-2">{blocks.map((block) => <Block key={block.id} block={block} />)}</div></section>)}</div>
       {session.unscheduledTasks.length ? <section className="rounded-2xl bg-amber-50 p-4"><h4 className="font-semibold">配置できなかったタスク</h4>{session.unscheduledTasks.map((item) => <p key={item.taskId} className="mt-2 text-sm">{item.title} — {item.reason}</p>)}</section> : null}
     </div> : null}

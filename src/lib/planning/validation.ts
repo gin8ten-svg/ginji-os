@@ -7,6 +7,22 @@ export function assertPlanningSessionId(value: string): void {
   if (!UUID_PATTERN.test(value)) throw new PlanningApiError('INVALID_REQUEST', '計画案IDの形式が正しくありません。', 400);
 }
 
+export function assertPlanningBlockId(value: string): void {
+  if (!UUID_PATTERN.test(value)) throw new PlanningApiError('INVALID_REQUEST', '計画block IDの形式が正しくありません。', 400);
+}
+
+export function planningActualMinutes(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).length !== 1 || !('actualMinutes' in value)) {
+    throw new PlanningApiError('INVALID_REQUEST', '実績時間を指定してください。', 400);
+  }
+  const actualMinutes = value.actualMinutes;
+  if (actualMinutes === null) return null;
+  if (typeof actualMinutes !== 'number' || !Number.isInteger(actualMinutes) || actualMinutes < 0 || actualMinutes > 2_147_483_647) {
+    throw new PlanningApiError('INVALID_REQUEST', '実績時間は0以上の整数で入力してください。', 400);
+  }
+  return actualMinutes;
+}
+
 export function assertPlanningIdempotencyKey(value: string | null): asserts value is string {
   if (!value) throw new PlanningApiError('INVALID_REQUEST', 'Idempotency-Keyが必要です。', 400);
   if (!UUID_PATTERN.test(value)) throw new PlanningApiError('INVALID_REQUEST', 'Idempotency-Keyの形式が正しくありません。', 400);

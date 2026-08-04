@@ -149,6 +149,7 @@ export interface Database {
       complete_calendar_event_write: { Args: { p_block_id: string; p_attempt_token: string; p_success: boolean; p_error_code: string | null; p_after_data: Json }; Returns: string };
       reserve_calendar_event_mutation: { Args: { p_session_id: string; p_block_id: string; p_input_hash: string; p_blocks_revision: number; p_operation: 'update' | 'delete' }; Returns: Json };
       complete_calendar_event_mutation: { Args: { p_block_id: string; p_attempt_token: string; p_success: boolean; p_error_code: string | null; p_after_data: Json }; Returns: string };
+      complete_planning_time_block: { Args: { p_session_id: string; p_block_id: string; p_actual_minutes: number | null }; Returns: Json };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

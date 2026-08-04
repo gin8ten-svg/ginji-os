@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { CalendarEventAlreadyExistsError, CalendarServiceError, type GoogleCalendarEventWriteInput } from '@/lib/calendar/google-api';
-import { approvePlanningSession, createAdvisedPlanningSession, createPlanningSession, getPlanningCalendarEventPreview, getPlanningSession, getPlanningSessionCalendarEventManagementPreview, mutatePlanningSessionCalendarEvents, planningFreshnessReason, planningGoogleEventId, rejectPlanningSession, writePlanningSessionToCalendar } from '@/lib/planning/server';
+import { approvePlanningSession, completePlanningTimeBlock, createAdvisedPlanningSession, createPlanningSession, getPlanningCalendarEventPreview, getPlanningExecutionPreview, getPlanningExecutionReview, getPlanningSession, getPlanningSessionCalendarEventManagementPreview, mutatePlanningSessionCalendarEvents, planningFreshnessReason, planningGoogleEventId, rejectPlanningSession, writePlanningSessionToCalendar } from '@/lib/planning/server';
 import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
 import { buildPlanningResult } from '@/lib/planner/engine';
 import { PlanningApiError } from '@/lib/planning/responses';
@@ -23,6 +23,10 @@ class StubQuery implements PromiseLike<QueryResult> {
   insert(payload: unknown) { return this.record('insert', payload); }
   delete() { return this.record('delete'); }
   eq(column: string, value: unknown) { this.filters.push([column, value]); return this; }
+  in(column: string, value: unknown) { this.filters.push([column, value]); return this; }
+  not(column: string, operator: string, value: unknown) { this.filters.push([column, `not.${operator}.${String(value)}`]); return this; }
+  gte(column: string, value: unknown) { this.filters.push([`${column}.gte`, value]); return this; }
+  lt(column: string, value: unknown) { this.filters.push([`${column}.lt`, value]); return this; }
   order() { return this; }
   limit() { return this; }
   single() { return Promise.resolve(this.owner.result(this.table, this.operation)); }
@@ -107,6 +111,69 @@ describe('planning server runtime workflows', () => {
     fake.calls.forEach((call) => expect(call.filters).toContainEqual(['user_id', userId]));
   });
   it('他ユーザー相当の空結果はPLAN_NOT_FOUND', async () => { const fake = new FakeSupabase(); queueGet(fake, null, []); await expect(getPlanningSession(fake.client(), userId, sessionId)).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' }); });
+  it('実行PreviewはV2 snapshot由来titleとown task blockだけを返す', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_sessions', 'select', { data: sessionRow('approved'), error: null });
+    fake.queue('planning_blocks', 'select', { data: [{ ...blockRow, title: '未信頼title' }], error: null });
+    fake.queue('time_blocks', 'select', { data: [{ planning_block_id: blockRow.id, task_id: block.taskId, start_at: block.start, end_at: block.end, status: 'approved', actual_minutes: null }], error: null });
+    const preview = await getPlanningExecutionPreview(fake.client(), userId, sessionId);
+    expect(preview).toEqual({ sessionId, status: 'approved', timeZone: 'Asia/Tokyo', blocks: [{ planningBlockId: blockRow.id, taskId: block.taskId, title: 'Task', start: block.start, end: block.end, plannedMinutes: 60, status: 'approved', actualMinutes: null }] });
+    fake.calls.forEach((call) => expect(call.filters).toContainEqual(['user_id', userId]));
+  });
+  it('V2 snapshotが無い旧形式Sessionでも現在のtask titleへfallbackして実行Previewを返す', async () => {
+    const fake = new FakeSupabase();
+    const legacy = { ...sessionRow('approved'), input_snapshot_version: null, input_snapshot: null, engine_version: 'deterministic-v1' };
+    fake.queue('planning_sessions', 'select', { data: legacy, error: null });
+    fake.queue('planning_blocks', 'select', { data: [blockRow], error: null });
+    fake.queue('time_blocks', 'select', { data: [{ planning_block_id: blockRow.id, task_id: block.taskId, start_at: block.start, end_at: block.end, status: 'approved', actual_minutes: null }], error: null });
+    fake.queue('tasks', 'select', { data: [{ id: block.taskId, title: '現在のtitle' }], error: null });
+    const preview = await getPlanningExecutionPreview(fake.client(), userId, sessionId);
+    expect(preview).toEqual({ sessionId, status: 'approved', timeZone: 'Asia/Tokyo', blocks: [{ planningBlockId: blockRow.id, taskId: block.taskId, title: '現在のtitle', start: block.start, end: block.end, plannedMinutes: 60, status: 'approved', actualMinutes: null }] });
+    fake.calls.forEach((call) => expect(call.filters).toContainEqual(['user_id', userId]));
+  });
+  it('実行完了RPC結果を正規化しuser IDを引数へ渡さない', async () => {
+    const fake = new FakeSupabase(); fake.queueRpc({ data: { result: 'COMPLETED', status: 'completed', actual_minutes: 45, task_completed: true }, error: null });
+    await expect(completePlanningTimeBlock(fake.client(), sessionId, blockRow.id, 45)).resolves.toEqual({ planningBlockId: blockRow.id, status: 'completed', actualMinutes: 45, outcome: 'completed', taskCompleted: true });
+    expect(fake.rpcCalls[0]).toEqual({ name: 'complete_planning_time_block', args: { p_session_id: sessionId, p_block_id: blockRow.id, p_actual_minutes: 45 } });
+    expect(JSON.stringify(fake.rpcCalls[0])).not.toContain(userId);
+  });
+  it('実行対象なし・完了不可を構造化errorへ変換する', async () => {
+    const missing = new FakeSupabase(); missing.queueRpc({ data: { result: 'NOT_FOUND' }, error: null });
+    await expect(completePlanningTimeBlock(missing.client(), sessionId, blockRow.id, null)).rejects.toMatchObject({ code: 'TIME_BLOCK_NOT_FOUND', status: 404 });
+    const invalid = new FakeSupabase(); invalid.queueRpc({ data: { result: 'NOT_COMPLETABLE' }, error: null });
+    await expect(completePlanningTimeBlock(invalid.client(), sessionId, blockRow.id, null)).rejects.toMatchObject({ code: 'TIME_BLOCK_NOT_COMPLETABLE', status: 409 });
+  });
+  it('実行Reviewは今週分をAsia/Tokyoの日付境界で正しく集計し、未記録実績とcompleted以外を区別する', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('time_blocks', 'select', {
+      data: [
+        { start_at: '2026-07-14T01:00:00.000Z', end_at: '2026-07-14T02:00:00.000Z', status: 'completed', actual_minutes: 50 },
+        { start_at: '2026-07-14T05:00:00.000Z', end_at: '2026-07-14T05:30:00.000Z', status: 'approved', actual_minutes: null },
+        { start_at: '2026-07-15T00:30:00.000Z', end_at: '2026-07-15T01:30:00.000Z', status: 'completed', actual_minutes: null },
+        { start_at: '2026-07-13T14:59:00.000Z', end_at: '2026-07-13T15:29:00.000Z', status: 'approved', actual_minutes: null },
+        { start_at: '2026-07-10T01:00:00.000Z', end_at: '2026-07-10T02:00:00.000Z', status: 'completed', actual_minutes: 999 },
+      ],
+      error: null,
+    });
+    const review = await getPlanningExecutionReview(fake.client(), userId, new Date('2026-07-16T00:30:00.000Z'));
+    expect(review).toEqual({
+      timeZone: 'Asia/Tokyo',
+      days: [
+        { date: '2026-07-13', plannedMinutes: 30, actualMinutes: 0, totalBlocks: 1, completedBlocks: 0, recordedActualBlocks: 0 },
+        { date: '2026-07-14', plannedMinutes: 90, actualMinutes: 50, totalBlocks: 2, completedBlocks: 1, recordedActualBlocks: 1 },
+        { date: '2026-07-15', plannedMinutes: 60, actualMinutes: 0, totalBlocks: 1, completedBlocks: 1, recordedActualBlocks: 0 },
+        { date: '2026-07-16', plannedMinutes: 0, actualMinutes: 0, totalBlocks: 0, completedBlocks: 0, recordedActualBlocks: 0 },
+      ],
+    });
+    const call = fake.calls.find((item) => item.table === 'time_blocks');
+    expect(call?.filters).toEqual(expect.arrayContaining([
+      ['user_id', userId],
+      ['calendar_write_status', 'succeeded'],
+      ['task_id', 'not.is.null'],
+      ['start_at.gte', '2026-07-12T15:00:00.000Z'],
+      ['start_at.lt', '2026-07-16T15:00:00.000Z'],
+    ]));
+  });
   it.each(['approved', 'rejected', 'superseded'] as const)('legacy %s Sessionは読み取りを維持し変更しない', async (status) => {
     const fake = new FakeSupabase(); const legacy = { ...sessionRow(status), input_snapshot_version: null, input_snapshot: null, engine_version: 'deterministic-v1' }; queueGet(fake, legacy);
     expect((await getPlanningSession(fake.client(), userId, sessionId)).status).toBe(status); expect(fake.rpcCalls).toHaveLength(0); expect(fake.calls.some((call) => call.operation !== 'select')).toBe(false);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assertPlanningIdempotencyKey, assertPlanningSessionId, planningCalendarWriteTarget } from '@/lib/planning/validation';
+import { assertPlanningBlockId, assertPlanningIdempotencyKey, assertPlanningSessionId, planningActualMinutes, planningCalendarWriteTarget } from '@/lib/planning/validation';
 
 const { authenticatedPlanningClient } = vi.hoisted(() => ({ authenticatedPlanningClient: vi.fn() }));
 vi.mock('@/lib/planning/server', () => ({
@@ -50,6 +50,17 @@ describe('planning Calendar write target validation', () => {
     authenticatedPlanningClient.mockClear();
     const response = await writeToCalendar(new Request('http://localhost/api/planning/sessions/11111111-1111-4111-8111-111111111111/write-to-calendar', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ calendarId: 'primary', title: 'client-title' }) }), { params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111111' }) });
     expect(response.status).toBe(400); expect(authenticatedPlanningClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('planning execution validation', () => {
+  it('block UUIDとnullまたは0以上の整数だけを受け入れる', () => {
+    expect(() => assertPlanningBlockId('44444444-4444-4444-8444-444444444444')).not.toThrow();
+    expect(() => assertPlanningBlockId('bad')).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+    expect(planningActualMinutes({ actualMinutes: null })).toBeNull();
+    expect(planningActualMinutes({ actualMinutes: 0 })).toBe(0);
+    expect(planningActualMinutes({ actualMinutes: 45 })).toBe(45);
+    for (const value of [{}, { actualMinutes: -1 }, { actualMinutes: 1.5 }, { actualMinutes: '45' }, { actualMinutes: 45, title: 'client-title' }]) expect(() => planningActualMinutes(value)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
   });
 });
 

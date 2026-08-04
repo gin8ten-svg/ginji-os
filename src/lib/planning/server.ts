@@ -10,9 +10,11 @@ import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, PLANNING_ENG
 import { PlanningApiError } from '@/lib/planning/responses';
 import { SupabaseTaskRepository } from '@/lib/supabase-task-repository';
 import { createClient } from '@/lib/supabase/server';
+import { shiftTokyoDate, tokyoDateKey } from '@/lib/date-time';
+import { weekStart } from '@/lib/practical-mvp';
 import type { CalendarConnectionRow, Database, Json, PlanningBlockRow, PlanningSessionRow, TimeBlockRow } from '@/types/database';
 import type { PlanningResult, ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
-import type { CalendarEventMutationOperation, CalendarEventPreviewItem, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventManagementPreview, PlanningCalendarEventMutationItem, PlanningCalendarEventMutationResult, PlanningCalendarEventPreview, PlanningCalendarEventWriteItem, PlanningCalendarWriteResult, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
+import type { CalendarEventMutationOperation, CalendarEventPreviewItem, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventManagementPreview, PlanningCalendarEventMutationItem, PlanningCalendarEventMutationResult, PlanningCalendarEventPreview, PlanningCalendarEventWriteItem, PlanningCalendarWriteResult, PlanningExecutionPreview, PlanningExecutionResult, PlanningReview, PlanningReviewDay, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
 import type { TaskStore } from '@/types/tasks';
 import { hasGoogleCalendarEventWriteScope, type GoogleCalendarSummary } from '@/types/calendar';
 
@@ -660,4 +662,96 @@ export async function rejectPlanningSession(client: SupabaseClient<Database>, us
   if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を却下できませんでした。', 500);
   if (data !== 'REJECTED') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案だけを却下できます。', 409);
   return getPlanningSession(client, userId, id);
+}
+
+type ExecutionTimeBlockRow = Pick<TimeBlockRow, 'planning_block_id' | 'task_id' | 'start_at' | 'end_at' | 'status' | 'actual_minutes'>;
+
+export async function getPlanningExecutionPreview(client: SupabaseClient<Database>, userId: string, id: string): Promise<PlanningExecutionPreview> {
+  const { data: session, error: sessionError } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
+  if (sessionError) throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を取得できませんでした。', 500);
+  if (!session) throw new PlanningApiError('PLAN_NOT_FOUND', '計画案が見つかりません。', 404);
+  if (session.status !== 'approved' && session.status !== 'superseded') throw new PlanningApiError('PLAN_NOT_APPROVED', '承認済みの計画案だけを実行記録できます。', 409);
+  const isLegacySnapshot = session.input_snapshot_version === null && session.input_snapshot === null;
+  const snapshot = isLegacySnapshot ? null : verifyStoredPlanningSnapshot(session);
+
+  const [{ data: blockRows, error: blockError }, { data: executionRows, error: executionError }] = await Promise.all([
+    client.from('planning_blocks').select('*').eq('planning_session_id', id).eq('user_id', userId).order('start_at'),
+    client.from('time_blocks').select('planning_block_id,task_id,start_at,end_at,status,actual_minutes').eq('planning_session_id', id).eq('user_id', userId).eq('calendar_write_status', 'succeeded').order('start_at'),
+  ]);
+  if (blockError || executionError) throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を取得できませんでした。', 500);
+
+  const planningBlocks = new Map(((blockRows ?? []) as PlanningBlockRow[]).map((row) => [row.id, row]));
+  const executionTaskIds = [...new Set(((executionRows ?? []) as ExecutionTimeBlockRow[]).map((row) => row.task_id).filter((taskId): taskId is string => taskId !== null))];
+  const taskTitles = snapshot ? new Map(snapshot.tasks.map((task) => [task.id, task.title])) : await currentTaskTitles(client, userId, executionTaskIds);
+  const blocks = ((executionRows ?? []) as ExecutionTimeBlockRow[]).flatMap((row) => {
+    if (!row.task_id) return [];
+    const planningBlock = planningBlocks.get(row.planning_block_id);
+    const title = taskTitles.get(row.task_id);
+    if (!planningBlock || planningBlock.source_type !== 'task' || planningBlock.source_entity_id !== row.task_id || planningBlock.start_at !== row.start_at || planningBlock.end_at !== row.end_at || !title) {
+      throw new PlanningApiError('PLAN_INVALID', '実行blockと承認済み計画の対応を検証できませんでした。', 422);
+    }
+    if (row.status !== 'approved' && row.status !== 'in_progress' && row.status !== 'completed') return [];
+    return [{ planningBlockId: row.planning_block_id, taskId: row.task_id, title, start: row.start_at, end: row.end_at, plannedMinutes: planningBlock.duration_minutes, status: row.status, actualMinutes: row.actual_minutes }];
+  });
+  return { sessionId: id, status: session.status, timeZone: 'Asia/Tokyo', blocks };
+}
+
+async function currentTaskTitles(client: SupabaseClient<Database>, userId: string, taskIds: string[]): Promise<Map<string, string>> {
+  if (taskIds.length === 0) return new Map();
+  const { data, error } = await client.from('tasks').select('id,title').eq('user_id', userId).in('id', taskIds);
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を取得できませんでした。', 500);
+  return new Map((data ?? []).map((row) => [row.id, row.title]));
+}
+
+export async function completePlanningTimeBlock(client: SupabaseClient<Database>, sessionId: string, blockId: string, actualMinutes: number | null): Promise<PlanningExecutionResult> {
+  const { data, error } = await client.rpc('complete_planning_time_block', { p_session_id: sessionId, p_block_id: blockId, p_actual_minutes: actualMinutes });
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を保存できませんでした。', 500);
+  const value = jsonObject(data);
+  const result = typeof value?.result === 'string' ? value.result : null;
+  if (result === 'NOT_FOUND') throw new PlanningApiError('TIME_BLOCK_NOT_FOUND', '実行対象のblockが見つかりません。Google Calendarへの追加状態を確認してください。', 404);
+  if (result === 'SESSION_NOT_EXECUTABLE') throw new PlanningApiError('PLAN_NOT_APPROVED', '計画案の状態が変更されています。承認済み計画を選択してください。', 409);
+  if (result === 'NOT_TASK_BLOCK' || result === 'NOT_COMPLETABLE') throw new PlanningApiError('TIME_BLOCK_NOT_COMPLETABLE', 'このblockはタスク完了として記録できません。', 409);
+  if (result !== 'COMPLETED' && result !== 'ALREADY_COMPLETED' && result !== 'ACTUAL_RECORDED') {
+    throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を確認できませんでした。', 500);
+  }
+  const savedActualMinutes = typeof value?.actual_minutes === 'number' && Number.isInteger(value.actual_minutes) ? value.actual_minutes : null;
+  return {
+    planningBlockId: blockId,
+    status: 'completed',
+    actualMinutes: savedActualMinutes,
+    outcome: result === 'COMPLETED' ? 'completed' : result === 'ACTUAL_RECORDED' ? 'actual_recorded' : 'already_completed',
+    taskCompleted: value?.task_completed === true,
+  };
+}
+
+type ReviewTimeBlockRow = Pick<TimeBlockRow, 'start_at' | 'end_at' | 'status' | 'actual_minutes'>;
+
+export async function getPlanningExecutionReview(client: SupabaseClient<Database>, userId: string, now = new Date()): Promise<PlanningReview> {
+  const today = tokyoDateKey(now);
+  const start = weekStart(today);
+  const days = Array.from({ length: 7 }, (_, index) => shiftTokyoDate(start, index)).filter((date) => date <= today);
+  const windowStart = new Date(`${start}T00:00:00+09:00`).toISOString();
+  const windowEnd = new Date(`${shiftTokyoDate(today, 1)}T00:00:00+09:00`).toISOString();
+
+  const { data, error } = await client
+    .from('time_blocks')
+    .select('start_at,end_at,status,actual_minutes')
+    .eq('user_id', userId)
+    .eq('calendar_write_status', 'succeeded')
+    .not('task_id', 'is', null)
+    .gte('start_at', windowStart)
+    .lt('start_at', windowEnd);
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '振り返りを取得できませんでした。', 500);
+
+  const buckets = new Map<string, PlanningReviewDay>(days.map((date) => [date, { date, plannedMinutes: 0, actualMinutes: 0, totalBlocks: 0, completedBlocks: 0, recordedActualBlocks: 0 }]));
+  for (const row of (data ?? []) as ReviewTimeBlockRow[]) {
+    const bucket = buckets.get(tokyoDateKey(new Date(row.start_at)));
+    if (!bucket) continue;
+    bucket.plannedMinutes += Math.round((new Date(row.end_at).getTime() - new Date(row.start_at).getTime()) / 60_000);
+    bucket.totalBlocks += 1;
+    if (row.status !== 'completed') continue;
+    bucket.completedBlocks += 1;
+    if (row.actual_minutes !== null) { bucket.actualMinutes += row.actual_minutes; bucket.recordedActualBlocks += 1; }
+  }
+  return { timeZone: 'Asia/Tokyo', days: days.map((date) => buckets.get(date)!) };
 }

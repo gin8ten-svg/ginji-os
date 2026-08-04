@@ -1,7 +1,7 @@
 import type { ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
 
 export type PlanningSessionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
-export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'CALENDAR_EVENT_NOT_FOUND' | 'CALENDAR_EVENT_MISMATCH' | 'CALENDAR_EVENT_CONFLICT' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
+export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'CALENDAR_EVENT_NOT_FOUND' | 'CALENDAR_EVENT_MISMATCH' | 'CALENDAR_EVENT_CONFLICT' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'TIME_BLOCK_NOT_FOUND' | 'TIME_BLOCK_NOT_COMPLETABLE' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
 
 export interface PlanningAdviceView {
   advisorVersion: string; model: string; globalSummary: string; warnings: string[];
@@ -63,6 +63,29 @@ export interface PlanningCalendarEventMutationResult {
   sessionId: string; calendarId: string; operation: CalendarEventMutationOperation; status: 'completed' | 'partial' | 'failed';
   changedCount: number; unchangedCount: number; failedCount: number; inProgressCount: number; notAttemptedCount: number;
   needsReconnect: boolean; events: PlanningCalendarEventMutationItem[];
+}
+
+export interface PlanningExecutionBlock {
+  planningBlockId: string; taskId: string; title: string; start: string; end: string;
+  plannedMinutes: number; status: 'approved' | 'in_progress' | 'completed'; actualMinutes: number | null;
+}
+
+export interface PlanningExecutionPreview {
+  sessionId: string; status: 'approved' | 'superseded'; timeZone: 'Asia/Tokyo'; blocks: PlanningExecutionBlock[];
+}
+
+export interface PlanningExecutionResult {
+  planningBlockId: string; status: 'completed'; actualMinutes: number | null;
+  outcome: 'completed' | 'already_completed' | 'actual_recorded'; taskCompleted: boolean;
+}
+
+export interface PlanningReviewDay {
+  date: string; plannedMinutes: number; actualMinutes: number;
+  totalBlocks: number; completedBlocks: number; recordedActualBlocks: number;
+}
+
+export interface PlanningReview {
+  timeZone: 'Asia/Tokyo'; days: PlanningReviewDay[];
 }
 
 export interface PlanningAdviceCandidate {

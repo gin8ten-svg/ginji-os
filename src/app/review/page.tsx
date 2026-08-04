@@ -3,12 +3,13 @@
 import { EmptyState } from '@/components/empty-state';
 import { ErrorState } from '@/components/error-state';
 import { LoadingState } from '@/components/loading-state';
+import { PlanningReview } from '@/components/planning-review';
 import { useTaskData } from '@/components/task-data-provider';
 import { tokyoDateKey } from '@/lib/date-time';
 import { buildReviewSummary } from '@/lib/practical-mvp';
 
 export default function ReviewPage() {
-  const { store, isLoading, error, retry } = useTaskData();
+  const { store, isAuthenticated, isLoading, error, retry } = useTaskData();
   const summary = store ? buildReviewSummary(store, tokyoDateKey()) : null;
   const hasActivity = summary ? summary.weekCompletedTasks + summary.weekRoutineCompletions > 0 : false;
 
@@ -17,6 +18,7 @@ export default function ReviewPage() {
     {error ? <ErrorState title="振り返りを表示できません" description={error} onRetry={retry} /> : null}
     {isLoading ? <LoadingState /> : null}
     {!isLoading && summary ? <>
+      {isAuthenticated ? <PlanningReview /> : null}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
         <Metric label="今日の完了タスク" value={`${summary.todayCompletedTasks}件`} />
         <Metric label="今週の完了タスク" value={`${summary.weekCompletedTasks}件`} />

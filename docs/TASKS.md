@@ -82,14 +82,15 @@
 
 ## Milestone 6 — Execution and review
 
-- [ ] 完了
+- [x] 完了（Google Calendar追加済みtask blockを原子的に完了し、task残り時間へ反映）
 - [ ] スキップ
-- [ ] 実績時間
+- [x] 実績時間（block単位、完了時または完了後に記録）
 - [ ] 持ち越し
 - [ ] 日次レビュー
 - [ ] 見積もり誤差
 
 ## Current task
 
-承認済みV2 Planning SessionのGoogle Calendar追加・canonical再同期・削除、および旧`create_planning_session` RPCの
-revoke/dropまで完了。非本番DBでの真の並列transaction実証は別タスクとして残す。
+Execution and reviewのうち、task block完了とblock単位の実績時間記録に加え、Review画面での週次予定/実績時間表示を実装。
+次はスキップ・持ち越し・日次レビュー（振り返りワークフロー）・見積もり誤差を扱う。
+非本番DBでの真の並列transaction実証は別タスクとして残す。
