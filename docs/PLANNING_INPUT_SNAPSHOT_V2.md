@@ -19,12 +19,14 @@ then rebuilds V2 from current server-owned inputs. A changed current hash is `PL
 `PLAN_INVALID`. Snapshot data and hashes are never returned by the public API.
 
 Legacy Sessions keep null snapshot columns and are never backfilled. They remain readable, but legacy drafts cannot be approved,
-sent for AI Advice, or used by the future Calendar preview. The user must explicitly create a new V2 plan.
+sent for AI Advice, or used by Calendar Preview/write. The user must explicitly create a new V2 plan.
 
-## Two-step rollout
+## Rollout status
 
 1. Apply `20260715001000_planning_input_snapshot_v2.sql`, adding nullable columns and `create_planning_session_v2` while retaining the legacy RPC.
 2. Deploy V2 server code and verify new normal and AI Sessions.
-3. In a separately reviewed future Migration, revoke and remove the legacy creation RPC.
+3. Verify Preview, Google Calendar creation, idempotent retry, canonical resync, and deletion with V2 Sessions.
+4. Apply `20260803000400_drop_legacy_planning_session_rpc.sql`, revoking and removing the legacy creation RPC without `CASCADE`.
 
-The Migration is created but intentionally not applied in this branch. Google Calendar preview and write APIs are not implemented.
+The V2 rollout and Calendar verification are complete. New legacy Sessions can no longer be created; existing legacy rows remain
+readable but cannot be approved, sent for AI Advice, previewed, or written to Google Calendar.
