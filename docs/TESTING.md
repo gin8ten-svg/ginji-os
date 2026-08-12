@@ -26,7 +26,13 @@ npm run test
    supabase db reset
    ```
 
-3. `supabase status -o env` の出力から `API_URL`・`ANON_KEY`・`SERVICE_ROLE_KEY` を確認し、リポジトリ直下に `.env.test.local`（`.gitignore`済み、コミットしない）を作成する。
+3. ローカルDBの`service_role`にfixture作成用のテーブルGRANTを付与する。`docs/ARCHITECTURE.md`の方針どおり本番migrationは`service_role`へテーブルGRANTを一切与えないため（`rolbypassrls`はあるがGRANT自体は別物）、統合テストのfixture作成（`insertTaskFixture`等）はこのローカル専用SQLを`db reset`のたびに再適用する必要がある。
+
+   ```bash
+   supabase db query --local -f supabase/tests/grant-local-service-role.sql
+   ```
+
+4. `supabase status -o env` の出力から `API_URL`・`ANON_KEY`・`SERVICE_ROLE_KEY` を確認し、リポジトリ直下に `.env.test.local`（`.gitignore`済み、コミットしない）を作成する。
 
    ```bash
    # .env.test.local

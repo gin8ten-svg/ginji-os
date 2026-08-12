@@ -109,12 +109,15 @@ begin
     and tstzrange(start_at, end_at) && tstzrange(p_start_at, p_end_at);
   if overlap_count > 0 then return 'OVERLAPS'; end if;
 
+  -- planning_blocksへのUPDATEはguard_planning_block_mutationトリガーが
+  -- blocks_revisionを既に+1するため、ここではmanually_editedのみ設定する
+  -- （二重に+1すると1回の手動編集でrevisionが2進んでしまう）。
   update public.planning_blocks
   set start_at = p_start_at, end_at = p_end_at, duration_minutes = new_duration
   where id = p_block_id;
 
   update public.planning_sessions
-  set blocks_revision = blocks_revision + 1, manually_edited = true
+  set manually_edited = true
   where id = block_record.planning_session_id;
 
   return 'UPDATED';
@@ -163,12 +166,15 @@ begin
   for update;
   if task_title is null then return 'TASK_NOT_FOUND'; end if;
 
+  -- planning_blocksへのUPDATEはguard_planning_block_mutationトリガーが
+  -- blocks_revisionを既に+1するため、ここではmanually_editedのみ設定する
+  -- （二重に+1すると1回の手動編集でrevisionが2進んでしまう）。
   update public.planning_blocks
   set source_entity_id = p_task_id::text, title = task_title
   where id = p_block_id;
 
   update public.planning_sessions
-  set blocks_revision = blocks_revision + 1, manually_edited = true
+  set manually_edited = true
   where id = block_record.planning_session_id;
 
   return 'UPDATED';

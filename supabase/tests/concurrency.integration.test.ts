@@ -30,7 +30,7 @@ describe('Concurrency and CASCADE behavior (real Supabase)', () => {
         p_session_id: plan.sessionId,
         p_block_id: plan.blockId,
         p_input_hash: plan.inputHash,
-        p_blocks_revision: 0,
+        p_blocks_revision: plan.blocksRevision,
         p_calendar_id: 'primary',
         p_google_event_id: `abcde${randomUUID().replace(/-/g, '').slice(0, 20)}`,
       };
@@ -61,7 +61,7 @@ describe('Concurrency and CASCADE behavior (real Supabase)', () => {
         clientA.rpc('approve_planning_session', {
           p_session_id: plan.sessionId,
           p_input_hash: plan.inputHash,
-          p_blocks_revision: 0,
+          p_blocks_revision: plan.blocksRevision,
         }),
       ]);
 
@@ -76,7 +76,7 @@ describe('Concurrency and CASCADE behavior (real Supabase)', () => {
         .eq('id', plan.blockId);
 
       if (approveResult.data === 'APPROVED') {
-        // 承認が先にblocks_revision=0で成立した場合、削除側は古いrevisionを前提にしていたため
+        // 承認が先にfixture作成時点のrevisionで成立した場合、削除側は古いrevisionを前提にしていたため
         // blocks_revisionの不一致でNOT_DELETEDになる想定だが、削除がapprove変更前にrevisionを
         // 進めた場合はdeleteが先勝ちしていたはず。ここでは「承認成功」と「blockが消えている」が
         // 同時に成り立つ（矛盾）ことだけを禁止する。

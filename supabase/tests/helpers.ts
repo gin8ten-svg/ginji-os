@@ -148,6 +148,8 @@ export interface PlanningSessionFixture {
   inputHash: string;
   windowStart: Date;
   windowEnd: Date;
+  /** guard_planning_block_mutationがblock挿入のたびに+1するため、挿入直後の実値を保持する（0固定ではない）。 */
+  blocksRevision: number;
 }
 
 export async function insertPlanningSessionFixture(
@@ -156,7 +158,8 @@ export async function insertPlanningSessionFixture(
   taskId: string,
 ): Promise<PlanningSessionFixture> {
   const inputHash = fakeInputHash(`${userId}:${randomUUID()}`);
-  const windowStart = new Date();
+  // planning_blocks_minute_aligned_check は start_at/end_at の秒未満を許さないため、分単位に切り捨てる。
+  const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000);
   const windowEnd = new Date(windowStart.getTime() + 60 * 60 * 1000);
   const { data: session, error: sessionError } = await service
     .from('planning_sessions')
@@ -192,7 +195,23 @@ export async function insertPlanningSessionFixture(
     throw new Error(`planning_blocks fixture作成に失敗しました: ${blockError?.message}`);
   }
 
-  return { sessionId: session.id, blockId: block.id, inputHash, windowStart, windowEnd };
+  const { data: refreshedSession, error: refreshError } = await service
+    .from('planning_sessions')
+    .select('blocks_revision')
+    .eq('id', session.id)
+    .single();
+  if (refreshError || !refreshedSession) {
+    throw new Error(`planning_sessions revision再取得に失敗しました: ${refreshError?.message}`);
+  }
+
+  return {
+    sessionId: session.id,
+    blockId: block.id,
+    inputHash,
+    windowStart,
+    windowEnd,
+    blocksRevision: refreshedSession.blocks_revision,
+  };
 }
 
 /** 承認済みsession + Calendar書き込み成功済みtime_blockまで一気に作る（skip/complete系RPCのfixture用）。 */

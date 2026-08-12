@@ -104,12 +104,16 @@ describe('RLS isolation (real Supabase, two ephemeral users)', () => {
       const { data: blockByB } = await clientB.from('planning_blocks').select('id').eq('id', plan.blockId);
       expect(blockByB).toEqual([]);
 
-      const { data: deleteBlockByB } = await clientB
+      // planning_blocksへのDELETEはauthenticatedから完全に剥奪されている
+      // （20260715000900のrevoke delete。delete_planning_block RPC経由のみ許可）。
+      // 所有者かどうかに関わらずテーブルレベルの権限エラーになる。
+      const { data: deleteBlockByB, error: deleteBlockByBError } = await clientB
         .from('planning_blocks')
         .delete()
         .eq('id', plan.blockId)
         .select('id');
-      expect(deleteBlockByB).toEqual([]);
+      expect(deleteBlockByBError).not.toBeNull();
+      expect(deleteBlockByB).toBeNull();
 
       const { data: sessionByA } = await clientA.from('planning_sessions').select('id').eq('id', plan.sessionId);
       expect(sessionByA).toHaveLength(1);
@@ -180,7 +184,7 @@ describe('RLS isolation (real Supabase, two ephemeral users)', () => {
       const { data: approveByB } = await clientB.rpc('approve_planning_session', {
         p_session_id: plan.sessionId,
         p_input_hash: plan.inputHash,
-        p_blocks_revision: 0,
+        p_blocks_revision: plan.blocksRevision,
       });
       expect(approveByB).toBe('NOT_UPDATED');
 
@@ -294,7 +298,9 @@ describe('RLS isolation (real Supabase, two ephemeral users)', () => {
 
       const { data: session } = await clientA.from('planning_sessions').select('manually_edited,blocks_revision').eq('id', plan.sessionId).single();
       expect(session?.manually_edited).toBe(true);
-      expect(session?.blocks_revision).toBe(1);
+      // guard_planning_block_mutationトリガーがblock UPDATE時に+1する分のみ進む
+      // （update_planning_block_time自身は二重にはインクリメントしない）。
+      expect(session?.blocks_revision).toBe(plan.blocksRevision + 1);
     });
   });
 
