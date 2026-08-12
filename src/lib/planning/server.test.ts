@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { CalendarEventAlreadyExistsError, CalendarServiceError, type GoogleCalendarEventWriteInput } from '@/lib/calendar/google-api';
-import { approvePlanningSession, completePlanningTimeBlock, createAdvisedPlanningSession, createPlanningSession, getPlanningCalendarEventPreview, getPlanningExecutionPreview, getPlanningExecutionReview, getPlanningSession, getPlanningSessionCalendarEventManagementPreview, mutatePlanningSessionCalendarEvents, planningFreshnessReason, planningGoogleEventId, rejectPlanningSession, writePlanningSessionToCalendar } from '@/lib/planning/server';
-import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
+import { approvePlanningSession, completePlanningTimeBlock, createAdvisedPlanningSession, createPlanningSession, deletePlanningBlock, getAiAdviceUsageSummary, getPlanningCalendarEventPreview, getPlanningDailyReview, getPlanningEstimationAccuracy, getPlanningExecutionPreview, getPlanningExecutionReview, getPlanningSession, getPlanningSessionCalendarEventManagementPreview, mutatePlanningSessionCalendarEvents, planningFreshnessReason, planningGoogleEventId, regeneratePlanningSession, rejectPlanningSession, skipPlanningTimeBlock, updatePlanningBlockTask, updatePlanningBlockTime, writePlanningSessionToCalendar } from '@/lib/planning/server';
+import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, PLANNING_ENGINE_VERSION, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
 import { buildPlanningResult } from '@/lib/planner/engine';
+import { AI_ADVISOR_VERSION } from '@/lib/planning/advisor';
 import { PlanningApiError } from '@/lib/planning/responses';
 import type { Database, Json, PlanningBlockRow, PlanningSessionRow } from '@/types/database';
 import type { PlanningResult, ProposedTimeBlock } from '@/types/planning';
@@ -48,10 +49,10 @@ class FakeSupabase {
 const userId = '11111111-1111-4111-8111-111111111111';
 const sessionId = '22222222-2222-4222-8222-222222222222';
 const createdAt = '2026-07-15T00:00:00.000Z';
-const snapshot: PlanningInputSnapshotV2 = { schemaVersion: 'planning-input-v2', engineVersion: 'deterministic-v2', window: { start: '2026-07-14T23:00:00.000Z', end: '2026-07-21T13:00:00.000Z', timeZone: 'Asia/Tokyo', workdayStart: '08:00', workdayEnd: '22:00', minimumSlotMinutes: 25, dates: ['2026-07-15'] }, now: '2026-07-15T00:00:00.000Z', tasks: [{ id: '33333333-3333-4333-8333-333333333333', title: 'Task', dueAt: null, priority: 3, estimatedMinutes: 60, remainingMinutes: 60, splittable: false, minimumBlockMinutes: 25, completedAt: null, updatedAt: createdAt }], routines: [], completions: [], busy: [] };
+const snapshot: PlanningInputSnapshotV2 = { schemaVersion: 'planning-input-v2', engineVersion: PLANNING_ENGINE_VERSION, window: { start: '2026-07-14T23:00:00.000Z', end: '2026-07-21T13:00:00.000Z', timeZone: 'Asia/Tokyo', workdayStart: '08:00', workdayEnd: '22:00', minimumSlotMinutes: 25, dates: ['2026-07-15'] }, now: '2026-07-15T00:00:00.000Z', tasks: [{ id: '33333333-3333-4333-8333-333333333333', title: 'Task', dueAt: null, priority: 3, estimatedMinutes: 60, remainingMinutes: 60, splittable: false, minimumBlockMinutes: 25, completedAt: null, updatedAt: createdAt }], routines: [], completions: [], busy: [] };
 const hash = hashPlanningInputSnapshotV2(snapshot);
 const block: ProposedTimeBlock = { id: 'block', source: 'task', taskId: '33333333-3333-4333-8333-333333333333', routineId: null, title: 'Task', start: '2026-07-15T02:00:00.000Z', end: '2026-07-15T03:00:00.000Z', splitIndex: 1 };
-const sessionRow = (status: PlanningSessionRow['status'] = 'draft'): PlanningSessionRow => ({ id: sessionId, user_id: userId, status, window_start: '2026-07-14T23:00:00.000Z', window_end: '2026-07-21T13:00:00.000Z', input_now: '2026-07-15T00:00:00.000Z', input_hash: hash, engine_version: 'deterministic-v2', warning_codes: [], result_summary: { unscheduledTasks: [], unscheduledRoutines: [] }, created_at: createdAt, updated_at: createdAt, approved_at: status === 'approved' ? '2026-07-15T00:30:00.000Z' : null, rejected_at: status === 'rejected' ? '2026-07-15T00:30:00.000Z' : null, idempotency_key: null, blocks_revision: 1, input_snapshot_version: 'planning-input-v2', input_snapshot: snapshot as unknown as Json });
+const sessionRow = (status: PlanningSessionRow['status'] = 'draft', manuallyEdited = false): PlanningSessionRow => ({ id: sessionId, user_id: userId, status, window_start: '2026-07-14T23:00:00.000Z', window_end: '2026-07-21T13:00:00.000Z', input_now: '2026-07-15T00:00:00.000Z', input_hash: hash, engine_version: PLANNING_ENGINE_VERSION, warning_codes: [], result_summary: { unscheduledTasks: [], unscheduledRoutines: [] }, created_at: createdAt, updated_at: createdAt, approved_at: status === 'approved' ? '2026-07-15T00:30:00.000Z' : null, rejected_at: status === 'rejected' ? '2026-07-15T00:30:00.000Z' : null, idempotency_key: null, blocks_revision: 1, input_snapshot_version: 'planning-input-v2', input_snapshot: snapshot as unknown as Json, manually_edited: manuallyEdited });
 const blockRow: PlanningBlockRow = { id: '44444444-4444-4444-8444-444444444444', planning_session_id: sessionId, user_id: userId, source_type: 'task', source_entity_id: block.taskId!, title: block.title, start_at: block.start, end_at: block.end, block_index: 1, duration_minutes: 60, metadata: {}, created_at: createdAt };
 const store: TaskStore = { version: 1, tasks: [{ id: block.taskId!, title: 'Task', description: '', dueAt: null, priority: 3, estimatedMinutes: 60, remainingMinutes: 60, splittable: false, minimumBlockMinutes: 25, category: '', completedAt: null, createdAt, updatedAt: createdAt, source: 'user' }], routines: [], routineCompletions: [] };
 const result: PlanningResult = { window: { start: sessionRow().window_start, end: sessionRow().window_end, timeZone: 'Asia/Tokyo', workdayStart: '08:00', workdayEnd: '22:00', minimumSlotMinutes: 25, dates: ['2026-07-15'] }, busyIntervals: [], freeSlots: [], proposedBlocks: [block], unscheduledTasks: [], unscheduledRoutines: [], warnings: [] };
@@ -143,6 +144,24 @@ describe('planning server runtime workflows', () => {
     const invalid = new FakeSupabase(); invalid.queueRpc({ data: { result: 'NOT_COMPLETABLE' }, error: null });
     await expect(completePlanningTimeBlock(invalid.client(), sessionId, blockRow.id, null)).rejects.toMatchObject({ code: 'TIME_BLOCK_NOT_COMPLETABLE', status: 409 });
   });
+  it('スキップRPC結果を正規化しuser IDを引数へ渡さない', async () => {
+    const fake = new FakeSupabase(); fake.queueRpc({ data: { result: 'SKIPPED', status_reason: 'user_skipped' }, error: null });
+    await expect(skipPlanningTimeBlock(fake.client(), sessionId, blockRow.id, 'user_skipped')).resolves.toEqual({ planningBlockId: blockRow.id, status: 'skipped', statusReason: 'user_skipped', outcome: 'skipped' });
+    expect(fake.rpcCalls[0]).toEqual({ name: 'skip_planning_time_block', args: { p_session_id: sessionId, p_block_id: blockRow.id, p_reason: 'user_skipped' } });
+    expect(JSON.stringify(fake.rpcCalls[0])).not.toContain(userId);
+  });
+  it('すでにスキップ済みのblockは既存の理由付きでALREADY_SKIPPEDを返す', async () => {
+    const fake = new FakeSupabase(); fake.queueRpc({ data: { result: 'ALREADY_SKIPPED', status_reason: 'carried_over' }, error: null });
+    await expect(skipPlanningTimeBlock(fake.client(), sessionId, blockRow.id, 'user_skipped')).resolves.toEqual({ planningBlockId: blockRow.id, status: 'skipped', statusReason: 'carried_over', outcome: 'already_skipped' });
+  });
+  it('スキップ対象なし・スキップ不可・未終了を構造化errorへ変換する', async () => {
+    const missing = new FakeSupabase(); missing.queueRpc({ data: { result: 'NOT_FOUND' }, error: null });
+    await expect(skipPlanningTimeBlock(missing.client(), sessionId, blockRow.id, 'user_skipped')).rejects.toMatchObject({ code: 'TIME_BLOCK_NOT_FOUND', status: 404 });
+    const notSkippable = new FakeSupabase(); notSkippable.queueRpc({ data: { result: 'NOT_SKIPPABLE' }, error: null });
+    await expect(skipPlanningTimeBlock(notSkippable.client(), sessionId, blockRow.id, 'user_skipped')).rejects.toMatchObject({ code: 'TIME_BLOCK_NOT_SKIPPABLE', status: 409 });
+    const notYetEnded = new FakeSupabase(); notYetEnded.queueRpc({ data: { result: 'NOT_YET_ENDED' }, error: null });
+    await expect(skipPlanningTimeBlock(notYetEnded.client(), sessionId, blockRow.id, 'carried_over')).rejects.toMatchObject({ code: 'TIME_BLOCK_NOT_YET_ENDED', status: 409 });
+  });
   it('実行Reviewは今週分をAsia/Tokyoの日付境界で正しく集計し、未記録実績とcompleted以外を区別する', async () => {
     const fake = new FakeSupabase();
     fake.queue('time_blocks', 'select', {
@@ -173,6 +192,61 @@ describe('planning server runtime workflows', () => {
       ['start_at.gte', '2026-07-12T15:00:00.000Z'],
       ['start_at.lt', '2026-07-16T15:00:00.000Z'],
     ]));
+  });
+  it('日次Reviewは指定日のblockだけをtitle付きで返し、状態別に集計する', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('time_blocks', 'select', {
+      data: [
+        { planning_block_id: 'block-1', task_id: 'task-1', start_at: '2026-07-15T00:00:00.000Z', end_at: '2026-07-15T01:00:00.000Z', status: 'completed', status_reason: null, actual_minutes: 50 },
+        { planning_block_id: 'block-2', task_id: 'task-2', start_at: '2026-07-15T02:00:00.000Z', end_at: '2026-07-15T02:30:00.000Z', status: 'skipped', status_reason: 'carried_over', actual_minutes: null },
+        { planning_block_id: 'block-3', task_id: 'task-3', start_at: '2026-07-15T05:00:00.000Z', end_at: '2026-07-15T06:00:00.000Z', status: 'approved', status_reason: null, actual_minutes: null },
+      ],
+      error: null,
+    });
+    fake.queue('planning_blocks', 'select', { data: [{ id: 'block-1', title: 'タスクA' }, { id: 'block-2', title: 'タスクB' }, { id: 'block-3', title: 'タスクC' }], error: null });
+    const review = await getPlanningDailyReview(fake.client(), userId, '2026-07-15');
+    expect(review).toEqual({
+      date: '2026-07-15',
+      timeZone: 'Asia/Tokyo',
+      blocks: [
+        { taskId: 'task-1', title: 'タスクA', start: '2026-07-15T00:00:00.000Z', end: '2026-07-15T01:00:00.000Z', plannedMinutes: 60, status: 'completed', statusReason: null, actualMinutes: 50 },
+        { taskId: 'task-2', title: 'タスクB', start: '2026-07-15T02:00:00.000Z', end: '2026-07-15T02:30:00.000Z', plannedMinutes: 30, status: 'skipped', statusReason: 'carried_over', actualMinutes: null },
+        { taskId: 'task-3', title: 'タスクC', start: '2026-07-15T05:00:00.000Z', end: '2026-07-15T06:00:00.000Z', plannedMinutes: 60, status: 'approved', statusReason: null, actualMinutes: null },
+      ],
+      summary: { completed: 1, skipped: 1, pending: 1, plannedMinutes: 150, actualMinutes: 50 },
+    });
+  });
+  it('日次Reviewは不正な日付形式を400で拒否する', async () => {
+    const fake = new FakeSupabase();
+    await expect(getPlanningDailyReview(fake.client(), userId, '2026-13-40')).rejects.toMatchObject({ code: 'INVALID_REQUEST', status: 400 });
+  });
+  it('見積もり誤差は完了・実績記録済みblockだけをタスク単位で集計し、誤差の大きい順に上位を返す', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('time_blocks', 'select', {
+      data: [
+        { task_id: 'task-1', start_at: '2026-07-10T00:00:00.000Z', end_at: '2026-07-10T01:00:00.000Z', actual_minutes: 90 },
+        { task_id: 'task-2', start_at: '2026-07-11T00:00:00.000Z', end_at: '2026-07-11T00:30:00.000Z', actual_minutes: 30 },
+      ],
+      error: null,
+    });
+    fake.queue('tasks', 'select', { data: [{ id: 'task-1', title: '重いタスク' }, { id: 'task-2', title: '軽いタスク' }], error: null });
+    const summary = await getPlanningEstimationAccuracy(fake.client(), userId, new Date('2026-07-15T00:00:00.000Z'), 30);
+    expect(summary).toEqual({
+      rangeDays: 30,
+      sampleSize: 2,
+      totalPlannedMinutes: 90,
+      totalActualMinutes: 120,
+      averageVarianceMinutes: 15,
+      averageVariancePercent: 33.3,
+      overEstimatedCount: 0,
+      underEstimatedCount: 1,
+      accurateCount: 1,
+      items: [{ taskId: 'task-1', title: '重いタスク', plannedMinutes: 60, actualMinutes: 90, varianceMinutes: 30 }, { taskId: 'task-2', title: '軽いタスク', plannedMinutes: 30, actualMinutes: 30, varianceMinutes: 0 }],
+    });
+  });
+  it('見積もり誤差は実績記録なしの場合、空のsummaryを返す', async () => {
+    const fake = new FakeSupabase(); fake.queue('time_blocks', 'select', { data: [], error: null });
+    await expect(getPlanningEstimationAccuracy(fake.client(), userId)).resolves.toEqual({ rangeDays: 30, sampleSize: 0, totalPlannedMinutes: 0, totalActualMinutes: 0, averageVarianceMinutes: 0, averageVariancePercent: null, overEstimatedCount: 0, underEstimatedCount: 0, accurateCount: 0, items: [] });
   });
   it.each(['approved', 'rejected', 'superseded'] as const)('legacy %s Sessionは読み取りを維持し変更しない', async (status) => {
     const fake = new FakeSupabase(); const legacy = { ...sessionRow(status), input_snapshot_version: null, input_snapshot: null, engine_version: 'deterministic-v1' }; queueGet(fake, legacy);
@@ -414,6 +488,25 @@ describe('planning server runtime workflows', () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: 'BLOCKS_CHANGED', error: null });
     await expect(approvePlanningSession(fake.client(), userId, sessionId, dependencies())).rejects.toMatchObject({ code: 'PLAN_STALE', status: 409 }); expect(fake.rpcCalls[0]?.args).toMatchObject({ p_blocks_revision: 1 });
   });
+  it('manually_edited=trueはvalidateStoredPlanの完全一致を要求せず、hard constraintだけで承認できる', async () => {
+    const fake = new FakeSupabase();
+    const editedRow = sessionRow('draft', true);
+    queueGet(fake, editedRow);
+    fake.queue('planning_sessions', 'select', { data: editedRow, error: null });
+    fake.queueRpc({ data: 'APPROVED', error: null });
+    queueGet(fake, { ...editedRow, status: 'approved' });
+    const detail = await approvePlanningSession(fake.client(), userId, sessionId, dependencies());
+    expect(detail.status).toBe('approved');
+  });
+  it('manually_edited=trueでもremaining_minutesを超える配置はPLAN_INVALID', async () => {
+    const fake = new FakeSupabase();
+    const editedRow = sessionRow('draft', true);
+    queueGet(fake, editedRow);
+    fake.queue('planning_sessions', 'select', { data: editedRow, error: null });
+    const deps = dependencies();
+    const shortStore = { ...store, tasks: [{ ...store.tasks[0], remainingMinutes: 30 }] };
+    await expect(approvePlanningSession(fake.client(), userId, sessionId, { ...deps, loadCurrentInput: async () => ({ ...(await deps.loadCurrentInput()), store: shortStore }) })).rejects.toMatchObject({ code: 'PLAN_INVALID' });
+  });
   it('正常却下しRPC競合とapproved却下を拒否', async () => {
     const good = new FakeSupabase(); queueGet(good, sessionRow()); good.queueRpc({ data: 'REJECTED', error: null }); queueGet(good, sessionRow('rejected')); expect((await rejectPlanningSession(good.client(), userId, sessionId)).status).toBe('rejected');
     const race = new FakeSupabase(); queueGet(race, sessionRow()); race.queueRpc({ data: 'NOT_UPDATED', error: null }); await expect(rejectPlanningSession(race.client(), userId, sessionId)).rejects.toMatchObject({ code: 'PLAN_NOT_DRAFT' });
@@ -424,13 +517,26 @@ describe('planning server runtime workflows', () => {
     const rejectFake = new FakeSupabase(); queueGet(rejectFake, null, []); await expect(rejectPlanningSession(rejectFake.client(), userId, sessionId)).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' });
   });
   it('AI adviceは元sessionを更新せず新しいdraftへ安全なmetadataとblocksを保存する', async () => {
-    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: true, error: null });
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: true, error: null }); fake.queueRpc({ data: 'usage-event-id', error: null });
     const advice = { advisorVersion: 'openai-advice-v1', model: 'test-model', globalSummary: 'safe', warnings: [], orderedSources: [{ alias: 'task_1', sourceType: 'task' as const, sourceId: block.taskId!, explanation: 'safe reason', changed: false }] };
-    const advised = { ...sessionRow(), id: '55555555-5555-4555-8555-555555555555', engine_version: 'deterministic-v2+openai-advice-v1', warning_codes: ['AI_ADVICE_APPLIED'], result_summary: { unscheduledTasks: [], unscheduledRoutines: [], advice } }; fake.queueRpc({ data: advised.id, error: null }); queueGet(fake, advised, [{ ...blockRow, planning_session_id: advised.id }]);
+    const advised = { ...sessionRow(), id: '55555555-5555-4555-8555-555555555555', engine_version: `${PLANNING_ENGINE_VERSION}+${AI_ADVISOR_VERSION}`, warning_codes: ['AI_ADVICE_APPLIED'], result_summary: { unscheduledTasks: [], unscheduledRoutines: [], advice } }; fake.queueRpc({ data: advised.id, error: null }); queueGet(fake, advised, [{ ...blockRow, planning_session_id: advised.id }]);
     const detail = await createAdvisedPlanningSession(fake.client(), userId, sessionId, { ...dependencies(), advisor: () => ({ model: 'test-model', advise: async (input) => ({ orderedSourceIds: input.deterministicOrdering, explanationBySourceId: { task_1: 'safe reason' }, globalSummary: 'safe', warnings: [] }) }) });
     expect(detail.status).toBe('draft'); expect(detail.advice?.model).toBe('test-model');
-    expect(fake.rpcCalls.find((item) => item.name === 'create_planning_session_v2')?.args).toMatchObject({ p_idempotency_key: null, p_engine_version: 'deterministic-v2+openai-advice-v1', p_input_snapshot_version: 'planning-input-v2' });
+    expect(fake.rpcCalls.find((item) => item.name === 'create_planning_session_v2')?.args).toMatchObject({ p_idempotency_key: null, p_engine_version: `${PLANNING_ENGINE_VERSION}+${AI_ADVISOR_VERSION}`, p_input_snapshot_version: 'planning-input-v2' });
+    expect(fake.rpcCalls.find((item) => item.name === 'record_ai_advice_usage')?.args).toMatchObject({ p_planning_session_id: sessionId, p_model: 'test-model', p_candidate_count: 1, p_success: true, p_error_code: null });
     expect(fake.calls.some((item) => item.operation === 'delete')).toBe(false); expect(fake.calls.some((item) => item.operation === ('update' as Operation))).toBe(false);
+  });
+  it('AI応答が無効な場合も利用量をsuccess:falseで記録してから元のエラーを返す', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: true, error: null }); fake.queueRpc({ data: 'usage-event-id', error: null });
+    await expect(createAdvisedPlanningSession(fake.client(), userId, sessionId, { ...dependencies(), advisor: () => ({ model: 'test-model', advise: async () => ({ invalid: true } as never) }) })).rejects.toMatchObject({ code: 'AI_INVALID_RESPONSE' });
+    expect(fake.rpcCalls.find((item) => item.name === 'record_ai_advice_usage')?.args).toMatchObject({ p_model: 'test-model', p_success: false, p_error_code: 'AI_INVALID_RESPONSE' });
+    expect(fake.rpcCalls.some((item) => item.name === 'create_planning_session_v2')).toBe(false);
+  });
+  it('利用量記録RPCの失敗はAI改善案の成否に影響しない', async () => {
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: true, error: null }); fake.queueRpc({ data: null, error: { message: 'boom' } });
+    const advised = { ...sessionRow(), id: '55555555-5555-4555-8555-555555555555', engine_version: `${PLANNING_ENGINE_VERSION}+${AI_ADVISOR_VERSION}` }; fake.queueRpc({ data: advised.id, error: null }); queueGet(fake, advised, [{ ...blockRow, planning_session_id: advised.id }]);
+    const detail = await createAdvisedPlanningSession(fake.client(), userId, sessionId, { ...dependencies(), advisor: () => ({ model: 'test-model', advise: async (input) => ({ orderedSourceIds: input.deterministicOrdering, explanationBySourceId: { task_1: 'safe reason' }, globalSummary: 'safe', warnings: [] }) }) });
+    expect(detail.status).toBe('draft');
   });
   it('原子予約失敗はprovider呼び出し前にrate limitする', async () => {
     const fake = new FakeSupabase(); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: false, error: null }); let calls = 0;
@@ -450,10 +556,146 @@ describe('planning server runtime workflows', () => {
     await providerStarted; controller.abort(); await expect(pending).rejects.toMatchObject({ code: 'AI_REQUEST_CANCELLED' }); expect(fake.calls.some((item) => item.operation === 'insert')).toBe(false); expect(fake.calls.some((item) => item.operation === ('update' as Operation))).toBe(false);
   });
   it('同一ユーザーの並列2相談は予約成功側だけproviderと保存へ進む', async () => {
-    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: true, error: null }); fake.queueRpc({ data: false, error: null });
-    const advised = { ...sessionRow(), id: '55555555-5555-4555-8555-555555555555', engine_version: 'deterministic-v2+openai-advice-v1' }; fake.queueRpc({ data: advised.id, error: null }); queueGet(fake, advised, [{ ...blockRow, planning_session_id: advised.id }]); let providerCalls = 0;
+    const fake = new FakeSupabase(); queueGet(fake, sessionRow()); queueGet(fake, sessionRow()); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queue('planning_sessions', 'select', { data: sessionRow(), error: null }); fake.queueRpc({ data: true, error: null }); fake.queueRpc({ data: false, error: null }); fake.queueRpc({ data: 'usage-event-id', error: null });
+    const advised = { ...sessionRow(), id: '55555555-5555-4555-8555-555555555555', engine_version: `${PLANNING_ENGINE_VERSION}+${AI_ADVISOR_VERSION}` }; fake.queueRpc({ data: advised.id, error: null }); queueGet(fake, advised, [{ ...blockRow, planning_session_id: advised.id }]); let providerCalls = 0;
     const options = { ...dependencies(), advisor: () => ({ advise: async () => { providerCalls += 1; return validAdviceForServer; } }) };
     const settled = await Promise.allSettled([createAdvisedPlanningSession(fake.client(), userId, sessionId, options), createAdvisedPlanningSession(fake.client(), userId, sessionId, options)]);
     expect(settled.filter((item) => item.status === 'fulfilled')).toHaveLength(1); expect(settled.filter((item) => item.status === 'rejected' && item.reason?.code === 'AI_RATE_LIMITED')).toHaveLength(1); expect(providerCalls).toBe(1); expect(fake.rpcCalls.filter((item) => item.name === 'create_planning_session_v2')).toHaveLength(1); expect(fake.calls.some((item) => item.operation === ('update' as Operation))).toBe(false);
+  });
+});
+
+describe('計画blockの手動編集', () => {
+  it('block削除RPCを呼び、削除後の最新セッションを返す', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    fake.queueRpc({ data: 'DELETED', error: null });
+    queueGet(fake, { ...sessionRow('draft', true) }, []);
+    const result = await deletePlanningBlock(fake.client(), userId, sessionId, blockRow.id);
+    expect(result.blocks).toEqual([]);
+    expect(fake.rpcCalls[0]).toEqual({ name: 'delete_planning_block', args: { p_block_id: blockRow.id } });
+  });
+  it('block所有権がURLのsessionIdと一致しなければPLAN_BLOCK_NOT_FOUND', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_blocks', 'select', { data: { planning_session_id: 'other-session' }, error: null });
+    await expect(deletePlanningBlock(fake.client(), userId, sessionId, blockRow.id)).rejects.toMatchObject({ code: 'PLAN_BLOCK_NOT_FOUND', status: 404 });
+    expect(fake.rpcCalls).toHaveLength(0);
+  });
+  it('draft以外のsessionへの削除RPCはPLAN_NOT_DRAFT', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    fake.queueRpc({ data: 'NOT_DELETED', error: null });
+    await expect(deletePlanningBlock(fake.client(), userId, sessionId, blockRow.id)).rejects.toMatchObject({ code: 'PLAN_NOT_DRAFT', status: 409 });
+  });
+  it('時刻更新RPCを呼び、更新後の最新セッションを返す', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    fake.queueRpc({ data: 'UPDATED', error: null });
+    queueGet(fake, sessionRow('draft', true));
+    const result = await updatePlanningBlockTime(fake.client(), userId, sessionId, blockRow.id, block.start, block.end);
+    expect(result.status).toBe('draft');
+    expect(fake.rpcCalls[0]).toEqual({ name: 'update_planning_block_time', args: { p_block_id: blockRow.id, p_start_at: block.start, p_end_at: block.end } });
+  });
+  it('時刻更新が他blockと重複する場合はPLAN_BLOCK_OVERLAPS', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    fake.queueRpc({ data: 'OVERLAPS', error: null });
+    await expect(updatePlanningBlockTime(fake.client(), userId, sessionId, blockRow.id, block.start, block.end)).rejects.toMatchObject({ code: 'PLAN_BLOCK_OVERLAPS', status: 409 });
+  });
+  it('タスク差し替えRPCを呼び、更新後の最新セッションを返す', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    fake.queueRpc({ data: 'UPDATED', error: null });
+    queueGet(fake, sessionRow('draft', true));
+    const result = await updatePlanningBlockTask(fake.client(), userId, sessionId, blockRow.id, '66666666-6666-4666-8666-666666666666');
+    expect(result.status).toBe('draft');
+    expect(fake.rpcCalls[0]).toEqual({ name: 'update_planning_block_task', args: { p_block_id: blockRow.id, p_task_id: '66666666-6666-4666-8666-666666666666' } });
+  });
+  it('存在しない・完了済みタスクへの差し替えはINVALID_REQUEST、routineブロックはPLAN_INVALID', async () => {
+    const notFound = new FakeSupabase();
+    notFound.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    notFound.queueRpc({ data: 'TASK_NOT_FOUND', error: null });
+    await expect(updatePlanningBlockTask(notFound.client(), userId, sessionId, blockRow.id, '77777777-7777-4777-8777-777777777777')).rejects.toMatchObject({ code: 'INVALID_REQUEST', status: 400 });
+
+    const notTaskBlock = new FakeSupabase();
+    notTaskBlock.queue('planning_blocks', 'select', { data: { planning_session_id: sessionId }, error: null });
+    notTaskBlock.queueRpc({ data: 'NOT_TASK_BLOCK', error: null });
+    await expect(updatePlanningBlockTask(notTaskBlock.client(), userId, sessionId, blockRow.id, '88888888-8888-4888-8888-888888888888')).rejects.toMatchObject({ code: 'PLAN_INVALID', status: 409 });
+  });
+});
+
+describe('計画案の再生成', () => {
+  it('draft状態のsessionは却下してから新しいsessionを作成する', async () => {
+    const fake = new FakeSupabase();
+    queueGet(fake, sessionRow('draft'));
+    fake.queueRpc({ data: 'REJECTED', error: null });
+    fake.queue('planning_sessions', 'select', { data: null, error: null });
+    fake.queueRpc({ data: sessionId, error: null });
+    queueGet(fake, sessionRow());
+    const detail = await regeneratePlanningSession(fake.client(), userId, sessionId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', dependencies());
+    expect(detail.status).toBe('draft');
+    expect(fake.rpcCalls.map((item) => item.name)).toEqual(['reject_planning_session', 'create_planning_session_v2']);
+  });
+  it('draft以外のsessionはreject RPCを呼ばずに新しいsessionを作成する', async () => {
+    const fake = new FakeSupabase();
+    queueGet(fake, sessionRow('approved'));
+    fake.queue('planning_sessions', 'select', { data: null, error: null });
+    fake.queueRpc({ data: sessionId, error: null });
+    queueGet(fake, sessionRow());
+    await regeneratePlanningSession(fake.client(), userId, sessionId, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', dependencies());
+    expect(fake.rpcCalls.map((item) => item.name)).toEqual(['create_planning_session_v2']);
+  });
+  it('却下に失敗した場合はPLAN_STALE', async () => {
+    const fake = new FakeSupabase();
+    queueGet(fake, sessionRow('draft'));
+    fake.queueRpc({ data: 'NOT_UPDATED', error: null });
+    await expect(regeneratePlanningSession(fake.client(), userId, sessionId, 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', dependencies())).rejects.toMatchObject({ code: 'PLAN_STALE' });
+  });
+});
+
+describe('AI Advice利用状況の月次集計', () => {
+  it('当月分のトークン数・成否・概算コストを集計する', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('ai_advice_usage_events', 'select', {
+      data: [
+        { model: 'gpt-5.6-luna', input_tokens: 1000, output_tokens: 500, success: true },
+        { model: 'gpt-5.6-luna', input_tokens: 2000, output_tokens: 1000, success: true },
+        { model: 'gpt-5.6-luna', input_tokens: null, output_tokens: null, success: false },
+      ],
+      error: null,
+    });
+    const summary = await getAiAdviceUsageSummary(fake.client(), userId, new Date('2026-07-15T00:00:00.000Z'));
+    expect(summary.totalCalls).toBe(3);
+    expect(summary.successfulCalls).toBe(2);
+    expect(summary.failedCalls).toBe(1);
+    expect(summary.totalInputTokens).toBe(3000);
+    expect(summary.totalOutputTokens).toBe(1500);
+    expect(summary.estimatedCostUsd).toBeCloseTo((3000 / 1_000_000) * 2 + (1500 / 1_000_000) * 8, 6);
+    expect(summary.monthStart).toBe('2026-06-30T15:00:00.000Z');
+    expect(summary.monthlyCallLimit).toBe(200);
+    expect(summary.nearMonthlyLimit).toBe(false);
+    const call = fake.calls.find((item) => item.table === 'ai_advice_usage_events');
+    expect(call?.filters).toEqual(expect.arrayContaining([
+      ['user_id', userId],
+      ['created_at.gte', '2026-06-30T15:00:00.000Z'],
+      ['created_at.lt', '2026-07-31T15:00:00.000Z'],
+    ]));
+  });
+  it('呼び出しなしの場合は0件のsummaryを返す', async () => {
+    const fake = new FakeSupabase(); fake.queue('ai_advice_usage_events', 'select', { data: [], error: null });
+    const summary = await getAiAdviceUsageSummary(fake.client(), userId, new Date('2026-07-15T00:00:00.000Z'));
+    expect(summary).toMatchObject({ totalCalls: 0, successfulCalls: 0, failedCalls: 0, totalInputTokens: 0, totalOutputTokens: 0, estimatedCostUsd: 0 });
+  });
+  it('月間上限の80%以上でnearMonthlyLimitがtrueになる', async () => {
+    const original = process.env.AI_ADVICE_MONTHLY_CALL_LIMIT;
+    process.env.AI_ADVICE_MONTHLY_CALL_LIMIT = '10';
+    try {
+      const fake = new FakeSupabase();
+      fake.queue('ai_advice_usage_events', 'select', { data: Array.from({ length: 8 }, () => ({ model: 'gpt-5.6-luna', input_tokens: 10, output_tokens: 10, success: true })), error: null });
+      const summary = await getAiAdviceUsageSummary(fake.client(), userId, new Date('2026-07-15T00:00:00.000Z'));
+      expect(summary.monthlyCallLimit).toBe(10);
+      expect(summary.nearMonthlyLimit).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.AI_ADVICE_MONTHLY_CALL_LIMIT; else process.env.AI_ADVICE_MONTHLY_CALL_LIMIT = original;
+    }
   });
 });

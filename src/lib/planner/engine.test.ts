@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlanningResult, calculateFreeSlots, comparePlanningTasks, createPlanningWindow, googleEventsToBusyIntervals, mergeBusyIntervals, planningPriorityBand } from '@/lib/planner/engine';
+import { buildPlanningResult, calculateFreeSlots, comparePlanningTasks, createPlanningWindow, googleEventsToBusyIntervals, mergeBusyIntervals, planningPriorityBand, validateProposedBlocksAgainstConstraints } from '@/lib/planner/engine';
 import type { ExternalCalendarEvent } from '@/types/calendar';
-import type { BusyInterval } from '@/types/planning';
-import type { Routine, Task } from '@/types/tasks';
+import type { BusyInterval, ProposedTimeBlock } from '@/types/planning';
+import type { Routine, Task, TaskStore } from '@/types/tasks';
 
 const now = new Date('2026-07-15T00:00:00.000Z'); // 09:00 Asia/Tokyo
 const iso = (date: string, time: string) => new Date(`${date}T${time}:00+09:00`).toISOString();
@@ -198,5 +198,47 @@ describe('Deterministic task and routine placement', () => {
     const result = buildPlanningResult({ now, events: [event('meeting', iso('2026-07-15', '12:00'), iso('2026-07-15', '13:00'))], tasks: [task({ id: 't1', title: 't1', remainingMinutes: 180 }), task({ id: 't2', title: 't2', remainingMinutes: 90, priority: 5 })], routines: [routine({ id: 'r1', name: 'r1', frequency: { type: 'weekdays', weekdays: [3] }, availableStartTime: '10:00', availableEndTime: '12:00' }), routine({ id: 'r2', name: 'r2', frequency: { type: 'weekdays', weekdays: [3] } })], completions: [] });
     const blocks = [...result.proposedBlocks].sort((a, b) => a.start.localeCompare(b.start));
     for (let index = 1; index < blocks.length; index += 1) expect(new Date(blocks[index - 1].end) <= new Date(blocks[index].start)).toBe(true);
+  });
+});
+
+describe('validateProposedBlocksAgainstConstraints（手動編集された計画の再検証）', () => {
+  const window = createPlanningWindow(now);
+  const store = (overrides: Partial<TaskStore> = {}): TaskStore => ({
+    version: 1,
+    tasks: [task({ id: 'task-a', title: 'task-a', remainingMinutes: 60, estimatedMinutes: 60 })],
+    routines: [routine({ id: 'routine-a', name: 'routine-a' })],
+    routineCompletions: [],
+    ...overrides,
+  });
+  const block = (value: Partial<ProposedTimeBlock> & Pick<ProposedTimeBlock, 'start' | 'end'>): ProposedTimeBlock => ({ id: 'block-1', source: 'task', taskId: 'task-a', routineId: null, title: 'task-a', splitIndex: 1, ...value });
+
+  it('稼働時間内・重複なし・remaining以内なら受理する', () => {
+    const result = validateProposedBlocksAgainstConstraints([block({ start: iso('2026-07-15', '10:00'), end: iso('2026-07-15', '11:00') })], window, store(), []);
+    expect(result).toEqual({ ok: true });
+  });
+  it('block同士が重複していれば拒否する', () => {
+    const blocks = [block({ id: 'b1', start: iso('2026-07-15', '10:00'), end: iso('2026-07-15', '11:00') }), block({ id: 'b2', start: iso('2026-07-15', '10:30'), end: iso('2026-07-15', '11:30') })];
+    const result = validateProposedBlocksAgainstConstraints(blocks, window, store({ tasks: [task({ id: 'task-a', title: 'task-a', remainingMinutes: 120, estimatedMinutes: 120 })] }), []);
+    expect(result.ok).toBe(false);
+  });
+  it('固定予定（Google busy）と重複していれば拒否する', () => {
+    const result = validateProposedBlocksAgainstConstraints([block({ start: iso('2026-07-15', '10:00'), end: iso('2026-07-15', '11:00') })], window, store(), [busy('fixed', '10:30', '10:45')]);
+    expect(result.ok).toBe(false);
+  });
+  it('稼働時間外なら拒否する', () => {
+    const result = validateProposedBlocksAgainstConstraints([block({ start: iso('2026-07-15', '22:30'), end: iso('2026-07-15', '23:00') })], window, store(), []);
+    expect(result.ok).toBe(false);
+  });
+  it('タスクのremainingMinutesを超えていれば拒否する', () => {
+    const result = validateProposedBlocksAgainstConstraints([block({ start: iso('2026-07-15', '10:00'), end: iso('2026-07-15', '12:00') })], window, store({ tasks: [task({ id: 'task-a', title: 'task-a', remainingMinutes: 60, estimatedMinutes: 60 })] }), []);
+    expect(result.ok).toBe(false);
+  });
+  it('存在しない・完了済みタスクを参照していれば拒否する', () => {
+    const result = validateProposedBlocksAgainstConstraints([block({ start: iso('2026-07-15', '10:00'), end: iso('2026-07-15', '11:00') })], window, store({ tasks: [] }), []);
+    expect(result.ok).toBe(false);
+  });
+  it('非アクティブなルーティンを参照していれば拒否する', () => {
+    const result = validateProposedBlocksAgainstConstraints([block({ id: 'r1', source: 'routine', taskId: null, routineId: 'routine-a', start: iso('2026-07-15', '10:00'), end: iso('2026-07-15', '10:30') })], window, store({ routines: [routine({ id: 'routine-a', name: 'routine-a', isActive: false })] }), []);
+    expect(result.ok).toBe(false);
   });
 });

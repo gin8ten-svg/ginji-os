@@ -3,18 +3,19 @@ import { createHash } from 'node:crypto';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { CalendarEventAlreadyExistsError, CalendarEventConflictError, CalendarEventNotFoundError, CalendarReconnectError, CalendarServiceError, createGoogleCalendarEvent, deleteGoogleCalendarEvent, getGoogleCalendarEvent, googleCalendarEventMatchesWriteInput, listGoogleCalendars, listGoogleEvents, updateGoogleCalendarEvent, validateWritableCalendar, type GoogleCalendarEventWriteInput, type GoogleCalendarWrittenEvent } from '@/lib/calendar/google-api';
 import { calendarAccessContext, markCalendarNeedsReconnect } from '@/lib/calendar/server';
-import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
+import { buildPlanningResult, createPlanningWindow, googleEventsToBusyIntervals, mergeBusyIntervals, validateProposedBlocksAgainstConstraints } from '@/lib/planner/engine';
 import { adviceView, AI_ADVISOR_VERSION, buildPlanningAdviceInput, orderingSourceIds, sanitizeAdvice } from '@/lib/planning/advisor';
-import { OpenAIPlanningAdvisor } from '@/lib/planning/openai-advisor';
+import { OpenAIPlanningAdvisor, type PlanningAdviceUsage } from '@/lib/planning/openai-advisor';
+import { aiAdviceMonthlyCallLimit, estimateAiAdviceCostUsd } from '@/lib/planning/ai-pricing';
 import { buildPlanningInputSnapshotV2, hashPlanningInputSnapshotV2, PLANNING_ENGINE_VERSION, PLANNING_INPUT_SNAPSHOT_VERSION, validatePlanningInputSnapshotV2, type PlanningInputSnapshotV2 } from '@/lib/planning/input-snapshot-v2';
 import { PlanningApiError } from '@/lib/planning/responses';
 import { SupabaseTaskRepository } from '@/lib/supabase-task-repository';
 import { createClient } from '@/lib/supabase/server';
 import { shiftTokyoDate, tokyoDateKey } from '@/lib/date-time';
 import { weekStart } from '@/lib/practical-mvp';
-import type { CalendarConnectionRow, Database, Json, PlanningBlockRow, PlanningSessionRow, TimeBlockRow } from '@/types/database';
+import type { AiAdviceUsageEventRow, CalendarConnectionRow, Database, Json, PlanningBlockRow, PlanningSessionRow, TimeBlockRow } from '@/types/database';
 import type { PlanningResult, ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
-import type { CalendarEventMutationOperation, CalendarEventPreviewItem, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventManagementPreview, PlanningCalendarEventMutationItem, PlanningCalendarEventMutationResult, PlanningCalendarEventPreview, PlanningCalendarEventWriteItem, PlanningCalendarWriteResult, PlanningExecutionPreview, PlanningExecutionResult, PlanningReview, PlanningReviewDay, PlanningSessionDetail, PlanningSessionSummary } from '@/types/planning-session';
+import type { AiAdviceUsageSummary, CalendarEventMutationOperation, CalendarEventPreviewItem, EstimationAccuracySummary, PlanningAdviceView, PlanningAdvisor, PlanningCalendarEventManagementPreview, PlanningCalendarEventMutationItem, PlanningCalendarEventMutationResult, PlanningCalendarEventPreview, PlanningCalendarEventWriteItem, PlanningCalendarWriteResult, PlanningDailyReview, PlanningExecutionPreview, PlanningExecutionResult, PlanningReview, PlanningReviewDay, PlanningSessionDetail, PlanningSessionSummary, PlanningSkipReason, PlanningSkipResult } from '@/types/planning-session';
 import type { TaskStore } from '@/types/tasks';
 import { hasGoogleCalendarEventWriteScope, type GoogleCalendarSummary } from '@/types/calendar';
 
@@ -119,10 +120,10 @@ function proposedFromRow(row: PlanningBlockRow): ProposedTimeBlock {
 
 export function detailFromRows(session: PlanningSessionRow, blocks: PlanningBlockRow[]): PlanningSessionDetail {
   const summary = summaryData(session.result_summary);
-  return { sessionId: session.id, status: session.status, windowStart: session.window_start, windowEnd: session.window_end, blocks: blocks.map(proposedFromRow), ...summary, warnings: session.warning_codes.map((code) => warningText[code] ?? code), engineVersion: session.engine_version, createdAt: session.created_at, approvedAt: session.approved_at, rejectedAt: session.rejected_at };
+  return { sessionId: session.id, status: session.status, windowStart: session.window_start, windowEnd: session.window_end, blocks: blocks.map(proposedFromRow), ...summary, warnings: session.warning_codes.map((code) => warningText[code] ?? code), engineVersion: session.engine_version, createdAt: session.created_at, approvedAt: session.approved_at, rejectedAt: session.rejected_at, manuallyEdited: session.manually_edited };
 }
 
-interface AdviceDependencies extends PlanningServerDependencies { advisor: () => PlanningAdvisor & { model?: string }; signal?: AbortSignal; }
+interface AdviceDependencies extends PlanningServerDependencies { advisor: () => PlanningAdvisor & { model?: string; lastUsage?: () => PlanningAdviceUsage | null }; signal?: AbortSignal; }
 const defaultAdviceDependencies: AdviceDependencies = { ...defaultDependencies, advisor: () => new OpenAIPlanningAdvisor() };
 
 const legacySnapshotError = () => new PlanningApiError('PLAN_STALE', 'この計画案は旧形式です。新しい計画案を作成し、承認してください。', 409);
@@ -146,21 +147,100 @@ export async function createAdvisedPlanningSession(client: SupabaseClient<Databa
   verifyStoredPlanningSnapshot(row);
   const input = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (input.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
-  if (!validateStoredPlan(saved.blocks, input.result, input.store)) throw new PlanningApiError('PLAN_INVALID', '元の計画案を再検証できませんでした。', 422);
-  if (planningFreshnessReason(row, input.result.proposedBlocks, now)) throw staleTimeError();
+  if (!validateSavedPlanningBlocks(row.manually_edited, saved.blocks, input.result, input)) throw new PlanningApiError('PLAN_INVALID', '元の計画案を再検証できませんでした。', 422);
+  // 手動編集済みsavedはinput.resultと一致しないことがあるため、鮮度は元のsaved.blocksで確認する。
+  if (planningFreshnessReason(row, saved.blocks, now)) throw staleTimeError();
   let aliases; try { aliases = buildPlanningAdviceInput(input.store, input.result, new Date(row.input_now)); } catch (error) { if (error instanceof Error && error.message === 'AI_INPUT_TOO_LARGE') throw new PlanningApiError('AI_INPUT_TOO_LARGE', 'AIへ相談できる項目数は100件までです。', 422); throw error; }
   if (deps.signal?.aborted) throw new PlanningApiError('AI_REQUEST_CANCELLED', 'AI相談をキャンセルしました。', 499);
   const { data: reserved, error: reservationError } = await client.rpc('reserve_ai_advice_request');
   if (reservationError) throw new PlanningApiError('PERSISTENCE_FAILED', 'AI相談を開始できませんでした。', 500);
   if (!reserved) throw new PlanningApiError('AI_RATE_LIMITED', 'AIへの再相談は30秒待ってから実行してください。', 429);
   if (deps.signal?.aborted) throw new PlanningApiError('AI_REQUEST_CANCELLED', 'AI相談をキャンセルしました。', 499);
-  const advisor = deps.advisor(); const raw = await advisor.advise(aliases.input, deps.signal);
-  let advice; try { advice = sanitizeAdvice(aliases.input, raw); } catch { throw new PlanningApiError('AI_INVALID_RESPONSE', 'AIから有効な改善案を取得できませんでした。', 502); }
-  const ordering = orderingSourceIds(advice, aliases);
-  const advisedResult = buildPlanningResult({ now: new Date(row.input_now), events: input.events, tasks: input.store.tasks, routines: input.store.routines, completions: input.store.routineCompletions, orderingOverride: ordering });
-  if (!validateStoredPlan(advisedResult.proposedBlocks, advisedResult, input.store)) throw new PlanningApiError('PLAN_INVALID', 'AI改善案を安全に配置できませんでした。', 422);
-  const view = adviceView(advice, aliases, advisor.model ?? 'configured-model');
-  return persistPlanningSession(client, userId, input, { ...advisedResult, warnings: input.result.warnings }, { inputNow: new Date(row.input_now), engineVersion: `${PLANNING_ENGINE_VERSION}+${AI_ADVISOR_VERSION}`, warningCodes: [...new Set([...input.warningCodes, 'AI_ADVICE_APPLIED'])], advice: view });
+  const advisor = deps.advisor();
+  const candidateCount = aliases.input.candidates.length;
+  const model = advisor.model ?? 'configured-model';
+  let succeeded = false;
+  try {
+    const raw = await advisor.advise(aliases.input, deps.signal);
+    let advice; try { advice = sanitizeAdvice(aliases.input, raw); } catch { throw new PlanningApiError('AI_INVALID_RESPONSE', 'AIから有効な改善案を取得できませんでした。', 502); }
+    const ordering = orderingSourceIds(advice, aliases);
+    const advisedResult = buildPlanningResult({ now: new Date(row.input_now), events: input.events, tasks: input.store.tasks, routines: input.store.routines, completions: input.store.routineCompletions, orderingOverride: ordering });
+    if (!validateStoredPlan(advisedResult.proposedBlocks, advisedResult, input.store)) throw new PlanningApiError('PLAN_INVALID', 'AI改善案を安全に配置できませんでした。', 422);
+    const view = adviceView(advice, aliases, model);
+    succeeded = true;
+    await recordAiAdviceUsage(client, id, model, candidateCount, advisor.lastUsage?.() ?? null, true, null);
+    return await persistPlanningSession(client, userId, input, { ...advisedResult, warnings: input.result.warnings }, { inputNow: new Date(row.input_now), engineVersion: `${PLANNING_ENGINE_VERSION}+${AI_ADVISOR_VERSION}`, warningCodes: [...new Set([...input.warningCodes, 'AI_ADVICE_APPLIED'])], advice: view });
+  } catch (error) {
+    if (!succeeded) await recordAiAdviceUsage(client, id, model, candidateCount, advisor.lastUsage?.() ?? null, false, error instanceof PlanningApiError ? error.code : 'AI_PROVIDER_ERROR');
+    throw error;
+  }
+}
+
+/**
+ * AI Advice利用量の記録はベストエフォート。自由記述やAI出力全文は送らず、
+ * モデル名・候補数・トークン数・成否・エラーコードだけを記録する。記録失敗で
+ * ユーザー体験（計画案自体の成否）をブロックしない。
+ */
+async function recordAiAdviceUsage(client: SupabaseClient<Database>, sessionId: string, model: string, candidateCount: number, usage: PlanningAdviceUsage | null, success: boolean, errorCode: string | null): Promise<void> {
+  try {
+    await client.rpc('record_ai_advice_usage', {
+      p_planning_session_id: sessionId,
+      p_model: model,
+      p_candidate_count: candidateCount,
+      p_input_tokens: usage?.inputTokens ?? null,
+      p_output_tokens: usage?.outputTokens ?? null,
+      p_success: success,
+      p_error_code: errorCode,
+    });
+  } catch {
+    // 利用量記録の失敗は握りつぶす（ログ目的のみで、計画案生成の成否には影響させない）。
+  }
+}
+
+function tokyoMonthWindow(now: Date): { start: string; end: string } {
+  const [yearStr, monthStr] = tokyoDateKey(now).split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return {
+    start: new Date(`${year}-${pad(month)}-01T00:00:00+09:00`).toISOString(),
+    end: new Date(`${nextYear}-${pad(nextMonth)}-01T00:00:00+09:00`).toISOString(),
+  };
+}
+
+type AiAdviceUsageRow = Pick<AiAdviceUsageEventRow, 'model' | 'input_tokens' | 'output_tokens' | 'success'>;
+
+export async function getAiAdviceUsageSummary(client: SupabaseClient<Database>, userId: string, now = new Date()): Promise<AiAdviceUsageSummary> {
+  const { start, end } = tokyoMonthWindow(now);
+  const { data, error } = await client
+    .from('ai_advice_usage_events')
+    .select('model,input_tokens,output_tokens,success')
+    .eq('user_id', userId)
+    .gte('created_at', start)
+    .lt('created_at', end);
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', 'AI利用状況を取得できませんでした。', 500);
+  const rows = (data ?? []) as AiAdviceUsageRow[];
+
+  const totalCalls = rows.length;
+  const successfulCalls = rows.filter((row) => row.success).length;
+  const totalInputTokens = rows.reduce((sum, row) => sum + (row.input_tokens ?? 0), 0);
+  const totalOutputTokens = rows.reduce((sum, row) => sum + (row.output_tokens ?? 0), 0);
+  const estimatedCostUsd = Math.round(rows.reduce((sum, row) => sum + estimateAiAdviceCostUsd(row.model, row.input_tokens ?? 0, row.output_tokens ?? 0), 0) * 10_000) / 10_000;
+  const monthlyCallLimit = aiAdviceMonthlyCallLimit();
+
+  return {
+    monthStart: start,
+    totalCalls,
+    successfulCalls,
+    failedCalls: totalCalls - successfulCalls,
+    totalInputTokens,
+    totalOutputTokens,
+    estimatedCostUsd,
+    monthlyCallLimit,
+    nearMonthlyLimit: monthlyCallLimit !== null && totalCalls >= monthlyCallLimit * 0.8,
+  };
 }
 
 export async function getPlanningSession(client: SupabaseClient<Database>, userId: string, id: string): Promise<PlanningSessionDetail> {
@@ -190,6 +270,17 @@ export function validateStoredPlan(blocks: ProposedTimeBlock[], current: Plannin
   const entities = new Set([...store.tasks.filter((item) => !item.completedAt).map((item) => `task:${item.id}`), ...store.routines.filter((item) => item.isActive).map((item) => `routine:${item.id}`)]);
   if (!blocks.every((item) => entities.has(`${item.source}:${item.taskId ?? item.routineId}`) && new Date(item.start) < new Date(item.end))) return false;
   return JSON.stringify(normalizedBlocks(blocks)) === JSON.stringify(normalizedBlocks(current.proposedBlocks));
+}
+
+/**
+ * manually_edited=falseの通常draftは決定論的Engineの再計算結果との完全一致を要求する
+ * （validateStoredPlan）。手動編集済みdraftはEngineの特定の配置と一致しなくなるため、
+ * hard constraintだけを独立に再検証するvalidateProposedBlocksAgainstConstraintsへ切り替える。
+ */
+function validateSavedPlanningBlocks(manuallyEdited: boolean, blocks: ProposedTimeBlock[], expected: PlanningResult, input: Pick<PlanningInput, 'store' | 'events'>): boolean {
+  if (!manuallyEdited) return validateStoredPlan(blocks, expected, input.store);
+  const googleBusy = mergeBusyIntervals(googleEventsToBusyIntervals(input.events, expected.window));
+  return validateProposedBlocksAgainstConstraints(blocks, expected.window, input.store, googleBusy).ok;
 }
 
 function expectedPlanningResult(saved: PlanningSessionDetail, row: PlanningSessionRow, current: PlanningInput): PlanningResult {
@@ -268,8 +359,9 @@ async function validatePlanningCalendarCandidate(client: SupabaseClient<Database
   const current = removeKnownCalendarWrites(await deps.loadCurrentInput(client, userId, inputNow), inputNow, knownWrites, allowManagedTimeDrift);
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。新しい計画案を作成し、再度承認してください。', 409);
   const expected = expectedPlanningResult(saved, row, current);
-  if (!validateStoredPlan(saved.blocks, expected, current.store)) throw new PlanningApiError('PLAN_INVALID', '承認済み計画を再検証できませんでした。', 422);
-  if (planningFreshnessReason(row, expected.proposedBlocks, deps.now())) throw stalePreviewError();
+  if (!validateSavedPlanningBlocks(row.manually_edited, saved.blocks, expected, current)) throw new PlanningApiError('PLAN_INVALID', '承認済み計画を再検証できませんでした。', 422);
+  // 手動編集済みsavedはexpectedと一致しないことがあるため、鮮度は実際に承認・書き込み対象のsaved.blocksで確認する。
+  if (planningFreshnessReason(row, saved.blocks, deps.now())) throw stalePreviewError();
   const events = calendarCandidateBlocks(saved.blocks, snapshot);
 
   const { data: finalState, error: finalStateError } = await client.from('planning_sessions').select('status,blocks_revision').eq('id', id).eq('user_id', userId).maybeSingle();
@@ -645,8 +737,9 @@ export async function approvePlanningSession(client: SupabaseClient<Database>, u
   const current = await deps.loadCurrentInput(client, userId, new Date(row.input_now));
   if (current.hash !== row.input_hash) throw new PlanningApiError('PLAN_STALE', 'タスクや予定が変更されています。計画案を再作成してください。', 409);
   const expected = expectedPlanningResult(saved, row, current);
-  if (!validateStoredPlan(saved.blocks, expected, current.store)) throw new PlanningApiError('PLAN_INVALID', '計画案を再検証できませんでした。', 422);
-  if (planningFreshnessReason(row, expected.proposedBlocks, deps.now())) throw staleTimeError();
+  if (!validateSavedPlanningBlocks(row.manually_edited, saved.blocks, expected, current)) throw new PlanningApiError('PLAN_INVALID', '計画案を再検証できませんでした。', 422);
+  // 手動編集済みsavedはexpectedと一致しないことがあるため、鮮度は実際に承認対象のsaved.blocksで確認する。
+  if (planningFreshnessReason(row, saved.blocks, deps.now())) throw staleTimeError();
   // approvedは確認状態にすぎない。Calendar書き込みは直前の完全再検証と別の冪等APIを必須とする。
   const { data, error } = await client.rpc('approve_planning_session', { p_session_id: id, p_input_hash: row.input_hash, p_blocks_revision: blocksRevision });
   if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を承認できませんでした。', 500);
@@ -664,7 +757,51 @@ export async function rejectPlanningSession(client: SupabaseClient<Database>, us
   return getPlanningSession(client, userId, id);
 }
 
-type ExecutionTimeBlockRow = Pick<TimeBlockRow, 'planning_block_id' | 'task_id' | 'start_at' | 'end_at' | 'status' | 'actual_minutes'>;
+/** 既存draftがあれば明示的に却下してから、同一のcalculate()経路で新しいdraftを作成する。 */
+export async function regeneratePlanningSession(client: SupabaseClient<Database>, userId: string, currentSessionId: string, idempotencyKey: string, dependencies: Partial<PlanningServerDependencies> = {}): Promise<PlanningSessionDetail> {
+  const current = await getPlanningSession(client, userId, currentSessionId);
+  if (current.status === 'draft') {
+    const { data, error } = await client.rpc('reject_planning_session', { p_session_id: currentSessionId });
+    if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画案を再作成できませんでした。', 500);
+    if (data !== 'REJECTED') throw new PlanningApiError('PLAN_STALE', '計画案の状態が変更されています。最新の状態を確認してください。', 409);
+  }
+  return createPlanningSession(client, userId, idempotencyKey, dependencies);
+}
+
+async function ownedDraftBlockSession(client: SupabaseClient<Database>, userId: string, sessionId: string, blockId: string, action: string): Promise<void> {
+  const { data: block, error } = await client.from('planning_blocks').select('planning_session_id').eq('id', blockId).eq('user_id', userId).maybeSingle();
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', `計画blockを${action}できませんでした。`, 500);
+  if (!block || block.planning_session_id !== sessionId) throw new PlanningApiError('PLAN_BLOCK_NOT_FOUND', `${action}対象の計画blockが見つかりません。`, 404);
+}
+
+export async function deletePlanningBlock(client: SupabaseClient<Database>, userId: string, sessionId: string, blockId: string): Promise<PlanningSessionDetail> {
+  await ownedDraftBlockSession(client, userId, sessionId, blockId, '削除');
+  const { data, error } = await client.rpc('delete_planning_block', { p_block_id: blockId });
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画blockを削除できませんでした。', 500);
+  if (data !== 'DELETED') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案のblockだけを削除できます。', 409);
+  return getPlanningSession(client, userId, sessionId);
+}
+
+export async function updatePlanningBlockTime(client: SupabaseClient<Database>, userId: string, sessionId: string, blockId: string, start: string, end: string): Promise<PlanningSessionDetail> {
+  await ownedDraftBlockSession(client, userId, sessionId, blockId, '更新');
+  const { data, error } = await client.rpc('update_planning_block_time', { p_block_id: blockId, p_start_at: start, p_end_at: end });
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画blockを更新できませんでした。', 500);
+  if (data === 'OVERLAPS') throw new PlanningApiError('PLAN_BLOCK_OVERLAPS', 'この時間帯は他の予定と重複しています。', 409);
+  if (data !== 'UPDATED') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案のblockだけを編集できます。', 409);
+  return getPlanningSession(client, userId, sessionId);
+}
+
+export async function updatePlanningBlockTask(client: SupabaseClient<Database>, userId: string, sessionId: string, blockId: string, taskId: string): Promise<PlanningSessionDetail> {
+  await ownedDraftBlockSession(client, userId, sessionId, blockId, '更新');
+  const { data, error } = await client.rpc('update_planning_block_task', { p_block_id: blockId, p_task_id: taskId });
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '計画blockを更新できませんでした。', 500);
+  if (data === 'NOT_TASK_BLOCK') throw new PlanningApiError('PLAN_INVALID', 'この計画blockはタスクの差し替えに対応していません。', 409);
+  if (data === 'TASK_NOT_FOUND') throw new PlanningApiError('INVALID_REQUEST', '差し替え先のタスクが見つかりません。', 400);
+  if (data !== 'UPDATED') throw new PlanningApiError('PLAN_NOT_DRAFT', '下書きの計画案のblockだけを編集できます。', 409);
+  return getPlanningSession(client, userId, sessionId);
+}
+
+type ExecutionTimeBlockRow = Pick<TimeBlockRow, 'planning_block_id' | 'task_id' | 'start_at' | 'end_at' | 'status' | 'status_reason' | 'actual_minutes'>;
 
 export async function getPlanningExecutionPreview(client: SupabaseClient<Database>, userId: string, id: string): Promise<PlanningExecutionPreview> {
   const { data: session, error: sessionError } = await client.from('planning_sessions').select('*').eq('id', id).eq('user_id', userId).maybeSingle();
@@ -676,7 +813,7 @@ export async function getPlanningExecutionPreview(client: SupabaseClient<Databas
 
   const [{ data: blockRows, error: blockError }, { data: executionRows, error: executionError }] = await Promise.all([
     client.from('planning_blocks').select('*').eq('planning_session_id', id).eq('user_id', userId).order('start_at'),
-    client.from('time_blocks').select('planning_block_id,task_id,start_at,end_at,status,actual_minutes').eq('planning_session_id', id).eq('user_id', userId).eq('calendar_write_status', 'succeeded').order('start_at'),
+    client.from('time_blocks').select('planning_block_id,task_id,start_at,end_at,status,status_reason,actual_minutes').eq('planning_session_id', id).eq('user_id', userId).eq('calendar_write_status', 'succeeded').order('start_at'),
   ]);
   if (blockError || executionError) throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を取得できませんでした。', 500);
 
@@ -690,8 +827,8 @@ export async function getPlanningExecutionPreview(client: SupabaseClient<Databas
     if (!planningBlock || planningBlock.source_type !== 'task' || planningBlock.source_entity_id !== row.task_id || planningBlock.start_at !== row.start_at || planningBlock.end_at !== row.end_at || !title) {
       throw new PlanningApiError('PLAN_INVALID', '実行blockと承認済み計画の対応を検証できませんでした。', 422);
     }
-    if (row.status !== 'approved' && row.status !== 'in_progress' && row.status !== 'completed') return [];
-    return [{ planningBlockId: row.planning_block_id, taskId: row.task_id, title, start: row.start_at, end: row.end_at, plannedMinutes: planningBlock.duration_minutes, status: row.status, actualMinutes: row.actual_minutes }];
+    if (row.status !== 'approved' && row.status !== 'in_progress' && row.status !== 'completed' && row.status !== 'skipped') return [];
+    return [{ planningBlockId: row.planning_block_id, taskId: row.task_id, title, start: row.start_at, end: row.end_at, plannedMinutes: planningBlock.duration_minutes, status: row.status, statusReason: row.status_reason, actualMinutes: row.actual_minutes }];
   });
   return { sessionId: id, status: session.status, timeZone: 'Asia/Tokyo', blocks };
 }
@@ -724,6 +861,20 @@ export async function completePlanningTimeBlock(client: SupabaseClient<Database>
   };
 }
 
+export async function skipPlanningTimeBlock(client: SupabaseClient<Database>, sessionId: string, blockId: string, reason: PlanningSkipReason): Promise<PlanningSkipResult> {
+  const { data, error } = await client.rpc('skip_planning_time_block', { p_session_id: sessionId, p_block_id: blockId, p_reason: reason });
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を保存できませんでした。', 500);
+  const value = jsonObject(data);
+  const result = typeof value?.result === 'string' ? value.result : null;
+  if (result === 'NOT_FOUND') throw new PlanningApiError('TIME_BLOCK_NOT_FOUND', '実行対象のblockが見つかりません。Google Calendarへの追加状態を確認してください。', 404);
+  if (result === 'SESSION_NOT_EXECUTABLE') throw new PlanningApiError('PLAN_NOT_APPROVED', '計画案の状態が変更されています。承認済み計画を選択してください。', 409);
+  if (result === 'NOT_TASK_BLOCK' || result === 'NOT_SKIPPABLE') throw new PlanningApiError('TIME_BLOCK_NOT_SKIPPABLE', 'このblockはスキップ・持ち越しとして記録できません。', 409);
+  if (result === 'NOT_YET_ENDED') throw new PlanningApiError('TIME_BLOCK_NOT_YET_ENDED', '予定時刻が終了するまで持ち越しにはできません。', 409);
+  if (result !== 'SKIPPED' && result !== 'ALREADY_SKIPPED') throw new PlanningApiError('PERSISTENCE_FAILED', '実行記録を確認できませんでした。', 500);
+  const statusReason = value?.status_reason === 'user_skipped' || value?.status_reason === 'carried_over' ? value.status_reason : reason;
+  return { planningBlockId: blockId, status: 'skipped', statusReason, outcome: result === 'SKIPPED' ? 'skipped' : 'already_skipped' };
+}
+
 type ReviewTimeBlockRow = Pick<TimeBlockRow, 'start_at' | 'end_at' | 'status' | 'actual_minutes'>;
 
 export async function getPlanningExecutionReview(client: SupabaseClient<Database>, userId: string, now = new Date()): Promise<PlanningReview> {
@@ -754,4 +905,103 @@ export async function getPlanningExecutionReview(client: SupabaseClient<Database
     if (row.actual_minutes !== null) { bucket.actualMinutes += row.actual_minutes; bucket.recordedActualBlocks += 1; }
   }
   return { timeZone: 'Asia/Tokyo', days: days.map((date) => buckets.get(date)!) };
+}
+
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+type DailyReviewTimeBlockRow = Pick<TimeBlockRow, 'planning_block_id' | 'task_id' | 'start_at' | 'end_at' | 'status' | 'status_reason' | 'actual_minutes'>;
+
+export async function getPlanningDailyReview(client: SupabaseClient<Database>, userId: string, date: string): Promise<PlanningDailyReview> {
+  if (!DATE_KEY_PATTERN.test(date)) throw new PlanningApiError('INVALID_REQUEST', '日付の形式が正しくありません。', 400);
+  const windowStart = new Date(`${date}T00:00:00+09:00`);
+  if (Number.isNaN(windowStart.getTime())) throw new PlanningApiError('INVALID_REQUEST', '日付の形式が正しくありません。', 400);
+  const windowEnd = new Date(`${shiftTokyoDate(date, 1)}T00:00:00+09:00`);
+
+  const { data, error } = await client
+    .from('time_blocks')
+    .select('planning_block_id,task_id,start_at,end_at,status,status_reason,actual_minutes')
+    .eq('user_id', userId)
+    .eq('calendar_write_status', 'succeeded')
+    .not('task_id', 'is', null)
+    .gte('start_at', windowStart.toISOString())
+    .lt('start_at', windowEnd.toISOString())
+    .order('start_at');
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '日次振り返りを取得できませんでした。', 500);
+  const rows = (data ?? []) as DailyReviewTimeBlockRow[];
+
+  const blockIds = rows.map((row) => row.planning_block_id);
+  const { data: blockRows, error: blockError } = blockIds.length
+    ? await client.from('planning_blocks').select('id,title').eq('user_id', userId).in('id', blockIds)
+    : { data: [] as Array<{ id: string; title: string }>, error: null };
+  if (blockError) throw new PlanningApiError('PERSISTENCE_FAILED', '日次振り返りを取得できませんでした。', 500);
+  const titles = new Map((blockRows ?? []).map((row) => [row.id, row.title]));
+
+  const blocks = rows.flatMap((row) => {
+    if (row.status !== 'approved' && row.status !== 'in_progress' && row.status !== 'completed' && row.status !== 'skipped') return [];
+    return [{
+      taskId: row.task_id!,
+      title: titles.get(row.planning_block_id) ?? '(削除された予定)',
+      start: row.start_at,
+      end: row.end_at,
+      plannedMinutes: Math.round((new Date(row.end_at).getTime() - new Date(row.start_at).getTime()) / 60_000),
+      status: row.status,
+      statusReason: row.status_reason,
+      actualMinutes: row.actual_minutes,
+    }];
+  });
+
+  const summary = blocks.reduce((acc, block) => {
+    acc.plannedMinutes += block.plannedMinutes;
+    if (block.status === 'completed') { acc.completed += 1; acc.actualMinutes += block.actualMinutes ?? 0; }
+    else if (block.status === 'skipped') acc.skipped += 1;
+    else acc.pending += 1;
+    return acc;
+  }, { completed: 0, skipped: 0, pending: 0, plannedMinutes: 0, actualMinutes: 0 });
+
+  return { date, timeZone: 'Asia/Tokyo', blocks, summary };
+}
+
+type EstimationTimeBlockRow = Pick<TimeBlockRow, 'task_id' | 'start_at' | 'end_at' | 'actual_minutes'>;
+
+export async function getPlanningEstimationAccuracy(client: SupabaseClient<Database>, userId: string, now = new Date(), rangeDays = 30): Promise<EstimationAccuracySummary> {
+  const clampedDays = Math.min(90, Math.max(7, Math.round(rangeDays)));
+  const windowStart = new Date(now.getTime() - clampedDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await client
+    .from('time_blocks')
+    .select('task_id,start_at,end_at,actual_minutes')
+    .eq('user_id', userId)
+    .eq('status', 'completed')
+    .eq('calendar_write_status', 'succeeded')
+    .not('task_id', 'is', null)
+    .not('actual_minutes', 'is', null)
+    .gte('start_at', windowStart);
+  if (error) throw new PlanningApiError('PERSISTENCE_FAILED', '見積もり誤差を取得できませんでした。', 500);
+  const rows = (data ?? []) as EstimationTimeBlockRow[];
+  if (!rows.length) {
+    return { rangeDays: clampedDays, sampleSize: 0, totalPlannedMinutes: 0, totalActualMinutes: 0, averageVarianceMinutes: 0, averageVariancePercent: null, overEstimatedCount: 0, underEstimatedCount: 0, accurateCount: 0, items: [] };
+  }
+
+  const byTask = new Map<string, { plannedMinutes: number; actualMinutes: number }>();
+  for (const row of rows) {
+    const taskId = row.task_id!;
+    const plannedMinutes = Math.round((new Date(row.end_at).getTime() - new Date(row.start_at).getTime()) / 60_000);
+    const current = byTask.get(taskId) ?? { plannedMinutes: 0, actualMinutes: 0 };
+    current.plannedMinutes += plannedMinutes;
+    current.actualMinutes += row.actual_minutes ?? 0;
+    byTask.set(taskId, current);
+  }
+  const titles = await currentTaskTitles(client, userId, [...byTask.keys()]);
+
+  let totalPlannedMinutes = 0; let totalActualMinutes = 0; let overEstimatedCount = 0; let underEstimatedCount = 0; let accurateCount = 0;
+  const items = [...byTask.entries()].map(([taskId, value]) => {
+    totalPlannedMinutes += value.plannedMinutes; totalActualMinutes += value.actualMinutes;
+    const varianceMinutes = value.actualMinutes - value.plannedMinutes;
+    if (varianceMinutes > 0) underEstimatedCount += 1; else if (varianceMinutes < 0) overEstimatedCount += 1; else accurateCount += 1;
+    return { taskId, title: titles.get(taskId) ?? '(削除されたタスク)', plannedMinutes: value.plannedMinutes, actualMinutes: value.actualMinutes, varianceMinutes };
+  }).sort((a, b) => Math.abs(b.varianceMinutes) - Math.abs(a.varianceMinutes)).slice(0, 10);
+
+  const averageVarianceMinutes = Math.round((totalActualMinutes - totalPlannedMinutes) / byTask.size);
+  const averageVariancePercent = totalPlannedMinutes > 0 ? Math.round(((totalActualMinutes - totalPlannedMinutes) / totalPlannedMinutes) * 1000) / 10 : null;
+
+  return { rangeDays: clampedDays, sampleSize: byTask.size, totalPlannedMinutes, totalActualMinutes, averageVarianceMinutes, averageVariancePercent, overEstimatedCount, underEstimatedCount, accurateCount, items };
 }

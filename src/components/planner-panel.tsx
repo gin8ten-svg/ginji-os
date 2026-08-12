@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CalendarEventPreview } from '@/components/calendar-event-preview';
+import { PlanningBlockEditor } from '@/components/planning-block-editor';
 import { PlanningExecution } from '@/components/planning-execution';
 import { getCalendarConnection, getCalendarEvents } from '@/lib/calendar/client';
 import { buildPlanningResult, createPlanningWindow } from '@/lib/planner/engine';
 import { PlanningIdempotencyKey, PlanningRequestCoordinator, resolvePlanningCalendarInput } from '@/lib/planner/calendar-input';
-import { adviseCloudPlanningSession, approveCloudPlanningSession, createCloudPlanningSession, getCloudPlanningSession, listCloudPlanningSessions, PlanningClientError, rejectCloudPlanningSession } from '@/lib/planning/client';
+import { adviseCloudPlanningSession, approveCloudPlanningSession, createCloudPlanningSession, getCloudPlanningSession, listCloudPlanningSessions, PlanningClientError, regenerateCloudPlanningSession, rejectCloudPlanningSession } from '@/lib/planning/client';
 import { approvalModalOpenAfterResult, canCloseApprovalModal } from '@/lib/planning/approval-ui';
 import { tokyoDateKey } from '@/lib/date-time';
 import type { PlanningResult, ProposedTimeBlock } from '@/types/planning';
@@ -17,8 +18,10 @@ const time = (value: string) => new Intl.DateTimeFormat('ja-JP', { timeZone: 'As
 const fullDate = (value: string) => new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 const statusText: Record<PlanningSessionStatus, string> = { draft: '下書き', approved: '承認済み', rejected: '却下済み', superseded: '更新済み' };
 
+// lib/planning/input-snapshot-v2.tsは`server-only`を読み込むためクライアントから直接importできない。
+// PLANNING_ENGINE_VERSIONを変更した場合はこの表示用リテラルも合わせて更新する。
 function localDetail(result: PlanningResult): PlanningSessionDetail {
-  return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, engineVersion: 'deterministic-v2', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null };
+  return { sessionId: 'local', status: 'draft', windowStart: result.window.start, windowEnd: result.window.end, blocks: result.proposedBlocks, unscheduledTasks: result.unscheduledTasks, unscheduledRoutines: result.unscheduledRoutines, warnings: result.warnings, engineVersion: 'deterministic-v3', createdAt: new Date().toISOString(), approvedAt: null, rejectedAt: null, advice: null, manuallyEdited: false };
 }
 
 export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store: TaskStore; isAuthenticated: boolean; onTaskUpdated(): void }) {
@@ -57,8 +60,11 @@ export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store:
     setLoading(true); setError(null); setStale(false);
     try {
       let next: PlanningSessionDetail;
-      if (isAuthenticated) next = await createCloudPlanningSession(planningKey.current.forRetryableOperation(), request.signal);
-      else {
+      if (isAuthenticated) {
+        next = session && session.status === 'draft'
+          ? await regenerateCloudPlanningSession(session.sessionId, planningKey.current.forRetryableOperation(), request.signal)
+          : await createCloudPlanningSession(planningKey.current.forRetryableOperation(), request.signal);
+      } else {
         const now = new Date(); const window = createPlanningWindow(now);
         const calendar = await resolvePlanningCalendarInput(false, window, request.signal, { getConnection: getCalendarConnection, getEvents: getCalendarEvents });
         next = localDetail({ ...buildPlanningResult({ now, events: calendar.events, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions }), warnings: calendar.warnings });
@@ -100,6 +106,7 @@ export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store:
 
   const grouped = session?.blocks.reduce<Record<string, ProposedTimeBlock[]>>((result, block) => { (result[tokyoDateKey(new Date(block.start))] ??= []).push(block); return result; }, {}) ?? {};
   const minutes = session?.blocks.reduce((sum, block) => sum + Math.round((new Date(block.end).getTime() - new Date(block.start).getTime()) / 60_000), 0) ?? 0;
+  const editableTasks = store.tasks.filter((item) => !item.completedAt);
 
   return <section className="rounded-3xl border border-cyan-200 bg-white p-4 shadow-sm" aria-label="7日間の計画案">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">7日間の計画案</h3><p className="mt-1 text-sm text-slate-600">空き時間へルーティンとタスクを決定論的に配置し、確認状態を保存します。</p></div><button type="button" disabled={loading || restoring} onClick={() => void calculate()} className="min-h-11 rounded-full bg-cyan-700 px-4 text-sm font-semibold text-white disabled:opacity-50">{loading ? '処理中…' : session ? '再計算' : '計画案を作成'}</button></div>
@@ -108,7 +115,7 @@ export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store:
     {restoring ? <p role="status" className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm">最新の計画案を復元しています…</p> : null}
     {error ? <div role="alert" className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700"><p>{error}</p>{stale ? <button type="button" onClick={() => void calculate()} className="mt-2 min-h-10 font-semibold underline">計画案を再作成</button> : null}</div> : null}
     {session ? <div className="mt-4 space-y-4">
-      <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-3 py-1 text-sm font-semibold ${stale ? 'bg-amber-100 text-amber-900' : session.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>{stale ? '古くなった計画' : statusText[session.status]}</span><span className="text-xs text-slate-500">{session.engineVersion}</span></div>
+      <div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-3 py-1 text-sm font-semibold ${stale ? 'bg-amber-100 text-amber-900' : session.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>{stale ? '古くなった計画' : statusText[session.status]}</span>{session.manuallyEdited ? <span className="rounded-full bg-cyan-100 px-3 py-1 text-sm font-semibold text-cyan-800">手動編集済み</span> : null}<span className="text-xs text-slate-500">{session.engineVersion}</span></div>
       {session.advice ? <section className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4"><div className="flex flex-wrap items-center gap-2"><h4 className="font-semibold text-indigo-950">AI改善案</h4><span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-indigo-700">AI提案・下書き</span></div><p className="mt-2 text-sm text-indigo-950">{session.advice.globalSummary || '決定論的な順序を維持しました。'}</p><p className="mt-2 text-xs text-indigo-800">AIは優先順位と理由だけを提案します。時刻配置と安全性はGinji OSが再検証しています。</p>{session.advice.orderedSources.some((item) => item.explanation) ? <ul className="mt-3 space-y-2">{session.advice.orderedSources.filter((item) => item.explanation).map((item) => <li key={item.alias} className="text-sm"><span className="font-semibold">{session.blocks.find((block) => (block.taskId ?? block.routineId) === item.sourceId)?.title ?? item.alias}</span>{item.changed ? <span className="ml-2 rounded-full bg-white px-2 py-0.5 text-xs text-indigo-700">順番変更</span> : null} — {item.explanation}</li>)}</ul> : null}{session.advice.warnings.length ? <ul className="mt-3 list-disc pl-5 text-sm text-amber-900">{session.advice.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}<p className="mt-3 text-xs text-indigo-800">AI反映後も未承認で、Google Calendarへは書き込みません。</p></section> : null}
       {session.warnings.map((warning) => <p key={warning} role="status" className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-900">{warning}</p>)}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="期間" value={`${fullDate(session.windowStart)}〜`} /><Metric label="配置" value={`${session.blocks.length}件`} /><Metric label="合計予定" value={`${minutes}分`} /><Metric label="未配置" value={`${session.unscheduledTasks.length + session.unscheduledRoutines.length}件`} /></div>
@@ -117,10 +124,13 @@ export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store:
       {session.status === 'approved' ? <p className="text-sm font-medium text-emerald-800">承認済み計画は変更されません。再計算すると新しい下書きを作成します。</p> : null}
       {isAuthenticated && session.status === 'approved' ? <CalendarEventPreview key={session.sessionId} sessionId={session.sessionId} onStale={() => setStale(true)} onReplan={() => void calculate()} /> : null}
       {isAuthenticated && (session.status === 'approved' || session.status === 'superseded') ? <PlanningExecution key={`execution:${session.sessionId}`} sessionId={session.sessionId} onTaskUpdated={onTaskUpdated} /> : null}
-      <div className="grid gap-3 lg:grid-cols-2">{Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([date, blocks]) => <section key={date} className="rounded-2xl border border-slate-200 p-3"><h4 className="font-semibold">{date}</h4><div className="mt-2 space-y-2">{blocks.map((block) => <Block key={block.id} block={block} />)}</div></section>)}</div>
+      {isAuthenticated && session.status === 'draft' ? <p className="text-xs text-slate-500">各予定の「時刻を変更」「タスクを差し替え」「削除」から手動編集できます。編集後の承認では安全性（重複・稼働時間・残り時間）を再検証します。</p> : null}
+      <div className="grid gap-3 lg:grid-cols-2">{Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([date, blocks]) => <section key={date} className="rounded-2xl border border-slate-200 p-3"><h4 className="font-semibold">{date}</h4><div className="mt-2 space-y-2">{blocks.map((block) => isAuthenticated && session.status === 'draft'
+        ? <PlanningBlockEditor key={block.id} sessionId={session.sessionId} block={block} tasks={editableTasks} onChanged={setSession} disabled={loading} />
+        : <Block key={block.id} block={block} />)}</div></section>)}</div>
       {session.unscheduledTasks.length ? <section className="rounded-2xl bg-amber-50 p-4"><h4 className="font-semibold">配置できなかったタスク</h4>{session.unscheduledTasks.map((item) => <p key={item.taskId} className="mt-2 text-sm">{item.title} — {item.reason}</p>)}</section> : null}
     </div> : null}
-    {confirming ? <div role="dialog" aria-modal="true" aria-labelledby="approval-title" onMouseDown={(event) => { if (canCloseApprovalModal(loading) && event.target === event.currentTarget) setConfirming(false); }} className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4"><div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl"><h4 id="approval-title" className="text-lg font-semibold">計画案を承認しますか？</h4><p className="mt-2 text-sm text-slate-600">最新データで再検証します。この時点ではGoogle Calendarへ書き込みません。</p>{error ? <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={loading} onClick={() => setConfirming(false)} className="min-h-11 rounded-full px-4 disabled:opacity-50">キャンセル</button><button type="button" disabled={loading} onClick={() => void approve()} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? '承認中…' : '承認する'}</button></div></div></div> : null}
+    {confirming && session ? <div role="dialog" aria-modal="true" aria-labelledby="approval-title" onMouseDown={(event) => { if (canCloseApprovalModal(loading) && event.target === event.currentTarget) setConfirming(false); }} className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4"><div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl"><h4 id="approval-title" className="text-lg font-semibold">計画案を承認しますか？</h4><p className="mt-2 text-sm text-slate-600">最新データで再検証します。この時点ではGoogle Calendarへ書き込みません。</p><div className="mt-3 grid grid-cols-3 gap-2 text-center text-sm"><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">期間</p><p className="mt-1 font-semibold">{fullDate(session.windowStart)}〜</p></div><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">配置</p><p className="mt-1 font-semibold">{session.blocks.length}件</p></div><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">合計予定</p><p className="mt-1 font-semibold">{minutes}分</p></div></div>{session.manuallyEdited ? <p className="mt-3 rounded-xl bg-cyan-50 p-3 text-sm text-cyan-900">この計画案は手動編集されています。承認時に重複・稼働時間・残り時間などの安全性を再検証します。</p> : null}{error ? <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={loading} onClick={() => setConfirming(false)} className="min-h-11 rounded-full px-4 disabled:opacity-50">キャンセル</button><button type="button" disabled={loading} onClick={() => void approve()} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? '承認中…' : '承認する'}</button></div></div></div> : null}
   </section>;
 }
 
