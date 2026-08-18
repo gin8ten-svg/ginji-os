@@ -29,7 +29,7 @@
 - [x] RLS
 - [x] ToDo CRUD
 - [x] ユーザー設定
-- [x] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する（`supabase/tests/rls-isolation.integration.test.ts`を新設。本環境はDocker非対応のため`supabase start`での実行確認は未実施、ローカルでの実行が必要）
+- [x] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する（`supabase/tests/rls-isolation.integration.test.ts`。ローカルSupabaseで実行確認済み、2026-08-18、16件全パス）
 
 ## Practical MVP — Daily use
 
@@ -72,7 +72,7 @@
 - [x] Googleイベント作成
 - [x] block単位の冪等性（DB状態 + 決定論的Google Event ID）
 - [x] approved/rejected/superseded SessionとblockのDB不変化
-- [x] 非本番DBでBlock DELETE RPC対Approvalの真の並列transactionとauth.users CASCADE削除を実証（`supabase/tests/concurrency.integration.test.ts`を新設。本環境はDocker非対応のため`supabase start`での実行確認は未実施、ローカルでの実行が必要）
+- [x] 非本番DBでBlock DELETE RPC対Approvalの真の並列transactionとauth.users CASCADE削除を実証（`supabase/tests/concurrency.integration.test.ts`。ローカルSupabaseで実行確認済み、2026-08-18）
 - [x] duration_minutesとstart/endのDB整合制約
 - [x] Calendar書き込み直前の完全再検証
 - [x] 部分成功を保持し失敗blockだけ再試行する方針
@@ -91,7 +91,14 @@
 
 ## Current task
 
-TASKS.md記載の全項目を実装済み。残るのは以下の手動確認のみ。
+TASKS.md記載の全項目を実装済み。
 
-- ローカルSupabase（`supabase start` → `supabase db reset`）で`npm run test:integration`を実行し、RLS分離テストと並列transaction/CASCADE実証を確認する（`docs/TESTING.md`参照。本開発環境はDocker非対応のため未実施）。
-- 一連のフロー（ToDo作成→計画生成→手動編集→承認→Calendar書込→完了/スキップ/持ち越し→日次・週次レビュー→見積もり誤差確認→AI利用量確認）をローカルSupabase・実Google Calendar接続ありで通しで手動確認する。
+- [x] ローカルSupabase（`supabase start` → `supabase db reset`）で`npm run test:integration`を実行し、RLS分離テストと並列transaction/CASCADE実証を確認する（`docs/TESTING.md`参照。2026-08-18、Docker Desktop起動のうえ実施、16件全パス）。
+- [x] 一連のフロー（ログイン→タスク→計画生成→承認→Calendar書込→完了→週次レビュー各セクション表示）を本番環境（`ginji-os.vercel.app`）・実Google Calendar接続ありで通しで手動確認した（2026-08-18）。手動編集・スキップ・持ち越しは未確認のまま残っている。
+
+### 2026-08-18の手動確認で発覚し対応した問題
+
+- 本番Supabaseプロジェクト（`ginji-os-dev`）が無操作により一時停止していた（DNS unresolvedを確認）→ ダッシュボードから復元
+- Google Calendar接続のrefresh tokenが失効していた（最終接続2026/08/03、Testing公開状態のtoken 7日失効が原因と推測）→ 接続解除→再接続で復旧
+- 本番`main`ブランチが2026/08/04時点（PR #6）で止まっており、Milestone 5後半〜6（完了/スキップ/持ち越し・日次振り返り・週次レビュー・見積もり誤差・AI利用状況・統合テスト）4コミットが未マージ・未デプロイだった → PR #7を作成・マージし本番デプロイ（https://github.com/gin8ten-svg/ginji-os/pull/7）
+- 上記に伴うmigration 4件（`20260804000100`〜`20260810000100`、`ai_advice_usage_events`テーブル含む）が本番Supabaseに未適用で、Review画面の「日次振り返り」「AI利用状況」がAPI 500エラーになっていた → `supabase db push`で適用し解消（同時に存在した無関係な進行中作業のmigration 5件は一時退避して触れずに実施）
