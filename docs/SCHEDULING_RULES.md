@@ -41,6 +41,8 @@ score =
 
 AIだけで順位を決めず、数値スコアを基礎に説明・微調整させる。
 
+`src/lib/planner/scoring.ts` の `candidateBaseScore` としてpriority_weight/urgency_weight/overdue_weightを実装済み（`goal_weight`は現行スキーマに目標概念が存在しないため常に0）。締切（effectiveDeadline）はハード制約のため常に最優先で比較し、スコアはeffectiveDeadlineが同値の候補間のみのtie-breakとして`src/lib/planner/engine.ts`の`planningCandidates`へ統合している。`fragmentationPenalty`/`contextSwitchPenalty`は同ファイルに実装・テスト済みだが、既存の決定論的スロット選択（first-fit、端数救済）を変更すると多数の配置テストの前提が崩れるため、現時点では候補順序へは統合していない。
+
 ## 4. Planner output schema
 
 ```json

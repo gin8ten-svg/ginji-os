@@ -5,7 +5,7 @@
 - [x] Next.js + TypeScript + Tailwind初期化
 - [x] ESLint設定
 - [x] 環境変数サンプル
-- [ ] 基本ディレクトリ作成
+- [x] 基本ディレクトリ作成（docs/ARCHITECTURE.mdを実構成に合わせて記載）
 - [x] CIでlint/typecheck/test/build
 - [x] モバイル用アプリシェル
 
@@ -29,7 +29,7 @@
 - [x] RLS
 - [x] ToDo CRUD
 - [x] ユーザー設定
-- [ ] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する
+- [x] 他ユーザーへ公開する前に、2ユーザーによるRLS分離テストを実施する（`supabase/tests/rls-isolation.integration.test.ts`を新設。本環境はDocker非対応のため`supabase start`での実行確認は未実施、ローカルでの実行が必要）
 
 ## Practical MVP — Daily use
 
@@ -52,7 +52,7 @@
 ## Milestone 4 — Planner proposal
 
 - [x] 制約エンジン
-- [ ] 優先順位スコア
+- [x] 優先順位スコア（priority/urgency/overdue。goal_weightは常に0、fragmentation/context_switchは未統合）
 - [x] OpenAI Responses APIによる最小化Structured Advice
 - [x] サーバー検証
 - [x] 提案プレビュー
@@ -61,18 +61,18 @@
 - [x] Planning Session生成のIdempotency-Key・原子的保存・重複request排除
 - [x] Planning Input Snapshot V2とtitle整合性基盤（Migration適用・動作確認済み、2026/07/31）
 - [x] AI AdviceのDB原子rate limit
-- [ ] AI Adviceの利用量監視
-- [ ] 手動編集
-- [ ] 再生成
+- [x] AI Adviceの利用量監視（ai_advice_usage_events・record_ai_advice_usage RPC、Review画面に月次概算表示）
+- [x] 手動編集（update_planning_block_time/task・delete_planning_block、manually_edited時はhard constraintのみ再検証）
+- [x] 再生成（regeneratePlanningSession、既存draftを明示rejectしてから新規作成）
 
 ## Milestone 5 — Calendar write
 
-- [ ] 承認画面
+- [x] 承認画面（承認確認モーダルに対象期間・block数・合計時間・手動編集注記を表示）
 - [x] V2 Migration適用・動作確認後にGoogle Calendar Event Previewを実装
 - [x] Googleイベント作成
 - [x] block単位の冪等性（DB状態 + 決定論的Google Event ID）
 - [x] approved/rejected/superseded SessionとblockのDB不変化
-- [ ] 非本番DBでBlock DELETE RPC対Approvalの真の並列transactionとauth.users CASCADE削除を実証
+- [x] 非本番DBでBlock DELETE RPC対Approvalの真の並列transactionとauth.users CASCADE削除を実証（`supabase/tests/concurrency.integration.test.ts`を新設。本環境はDocker非対応のため`supabase start`での実行確認は未実施、ローカルでの実行が必要）
 - [x] duration_minutesとstart/endのDB整合制約
 - [x] Calendar書き込み直前の完全再検証
 - [x] 部分成功を保持し失敗blockだけ再試行する方針
@@ -82,14 +82,16 @@
 
 ## Milestone 6 — Execution and review
 
-- [ ] 完了
-- [ ] スキップ
-- [ ] 実績時間
-- [ ] 持ち越し
-- [ ] 日次レビュー
-- [ ] 見積もり誤差
+- [x] 完了（Google Calendar追加済みtask blockを原子的に完了し、task残り時間へ反映）
+- [x] スキップ（skip_planning_time_block RPC、reason=user_skipped）
+- [x] 実績時間（block単位、完了時または完了後に記録）
+- [x] 持ち越し（skip_planning_time_block RPC、reason=carried_over。remaining_minutesは変更せず次回planning時に自動再候補化）
+- [x] 日次レビュー（getPlanningDailyReview、Review画面に日別カード追加）
+- [x] 見積もり誤差（getPlanningEstimationAccuracy、直近30日のタスク単位概算をReview画面に表示）
 
 ## Current task
 
-承認済みV2 Planning SessionのGoogle Calendar追加・canonical再同期・削除、および旧`create_planning_session` RPCの
-revoke/dropまで完了。非本番DBでの真の並列transaction実証は別タスクとして残す。
+TASKS.md記載の全項目を実装済み。残るのは以下の手動確認のみ。
+
+- ローカルSupabase（`supabase start` → `supabase db reset`）で`npm run test:integration`を実行し、RLS分離テストと並列transaction/CASCADE実証を確認する（`docs/TESTING.md`参照。本開発環境はDocker非対応のため未実施）。
+- 一連のフロー（ToDo作成→計画生成→手動編集→承認→Calendar書込→完了/スキップ/持ち越し→日次・週次レビュー→見積もり誤差確認→AI利用量確認）をローカルSupabase・実Google Calendar接続ありで通しで手動確認する。

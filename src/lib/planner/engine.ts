@@ -1,8 +1,9 @@
 import { datesCoveredByAllDayEvent } from '@/lib/calendar/event-dates';
 import { isRoutineScheduled, shiftTokyoDate, tokyoDateKey } from '@/lib/date-time';
+import { candidateBaseScore } from '@/lib/planner/scoring';
 import type { ExternalCalendarEvent } from '@/types/calendar';
 import type { BusyInterval, FreeSlot, PlanningResult, PlanningWindow, ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
-import type { Routine, RoutineCompletion, Task } from '@/types/tasks';
+import type { Routine, RoutineCompletion, Task, TaskStore } from '@/types/tasks';
 
 const MINUTE = 60_000;
 const DAY_START = '08:00';
@@ -96,8 +97,8 @@ export function comparePlanningTasks(a: Task, b: Task, now: Date): number {
 }
 
 type PlanningCandidate =
-  | { kind: 'task'; task: Task; effectiveDeadline: number; priority: number; createdAt: string; id: string }
-  | { kind: 'routine'; routine: Routine; date: string; effectiveDeadline: number; priority: number; createdAt: string; id: string };
+  | { kind: 'task'; task: Task; effectiveDeadline: number; priority: number; isOverdue: boolean; createdAt: string; id: string }
+  | { kind: 'routine'; routine: Routine; date: string; effectiveDeadline: number; priority: number; isOverdue: boolean; createdAt: string; id: string };
 
 function taskDeadline(task: Task, window: PlanningWindow, now: Date): number {
   if (!task.dueAt) return new Date(window.end).getTime();
@@ -123,16 +124,23 @@ export function planningPriorityBand(candidate: { kind: 'task'; dueAt: string | 
 
 function planningCandidates(window: PlanningWindow, tasks: readonly Task[], routines: readonly Routine[], completions: readonly RoutineCompletion[], now: Date, orderingOverride?: readonly string[]): PlanningCandidate[] {
   const completed = new Set(completions.map((item) => `${item.date}:${item.routineId}`));
+  const today = tokyoDateKey(now);
   const candidates: PlanningCandidate[] = [];
   for (const task of tasks) {
     const remaining = Math.max(0, Math.min(task.remainingMinutes, task.estimatedMinutes));
-    if (!task.completedAt && remaining > 0) candidates.push({ kind: 'task', task: { ...task, remainingMinutes: remaining }, effectiveDeadline: taskDeadline(task, window, now), priority: task.priority, createdAt: task.createdAt, id: task.id });
+    const isOverdue = task.dueAt ? tokyoDateKey(new Date(task.dueAt)) < today : false;
+    if (!task.completedAt && remaining > 0) candidates.push({ kind: 'task', task: { ...task, remainingMinutes: remaining }, effectiveDeadline: taskDeadline(task, window, now), priority: task.priority, isOverdue, createdAt: task.createdAt, id: task.id });
   }
   for (const date of window.dates) for (const routine of routines) {
     if (!isRoutineScheduled(routine, date) || completed.has(`${date}:${routine.id}`)) continue;
-    candidates.push({ kind: 'routine', routine, date, effectiveDeadline: instant(date, routine.availableEndTime ?? window.workdayEnd), priority: routine.priority, createdAt: routine.createdAt, id: `${routine.id}:${date}` });
+    candidates.push({ kind: 'routine', routine, date, effectiveDeadline: instant(date, routine.availableEndTime ?? window.workdayEnd), priority: routine.priority, isOverdue: false, createdAt: routine.createdAt, id: `${routine.id}:${date}` });
   }
-  const baseline = (a: PlanningCandidate, b: PlanningCandidate) => a.effectiveDeadline - b.effectiveDeadline || b.priority - a.priority || (a.kind === b.kind ? 0 : a.kind === 'task' ? -1 : 1) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+  const nowMs = now.getTime();
+  const windowEndMs = new Date(window.end).getTime();
+  const score = (item: PlanningCandidate) => candidateBaseScore({ priority: item.priority, effectiveDeadline: item.effectiveDeadline, isOverdue: item.isOverdue, now: nowMs, windowEnd: windowEndMs });
+  // docs/SCHEDULING_RULES.md §3のscore式をtie-breakとして使う。締切(effectiveDeadline)はハード制約の
+  // ため常に最優先で比較し、スコアはそれが同値の場合にのみpriority/urgency/overdueで並び順を決める。
+  const baseline = (a: PlanningCandidate, b: PlanningCandidate) => a.effectiveDeadline - b.effectiveDeadline || score(b) - score(a) || (a.kind === b.kind ? 0 : a.kind === 'task' ? -1 : 1) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
   if (!orderingOverride?.length) return candidates.sort(baseline);
   const ranks = new Map(orderingOverride.map((id, index) => [id, index]));
   const sourceKey = (item: PlanningCandidate) => item.kind === 'task' ? `task:${item.task.id}` : `routine:${item.routine.id}`;
@@ -208,4 +216,58 @@ export function buildPlanningResult(input: { now: Date; events: readonly Externa
   }
   const routineBusy = proposedBlocks.filter((block) => block.source === 'routine').map((block) => ({ start: block.start, end: block.end, source: 'routine' as const, sourceId: block.routineId ?? block.id, title: block.title }));
   return { window, busyIntervals: mergeBusyIntervals([...googleBusy, ...routineBusy]), freeSlots: slots, proposedBlocks: proposedBlocks.sort((a, b) => a.start.localeCompare(b.start) || a.id.localeCompare(b.id)), unscheduledTasks, unscheduledRoutines, warnings: [] };
+}
+
+/**
+ * docs/SCHEDULING_RULES.md §5「Server validation after AI output」のチェック項目を、
+ * 手動編集された計画blocksにも適用できる汎用バリデータとして実装する。決定論的Engineの
+ * 出力と完全一致するかを見るvalidateStoredPlan(server.ts)とは異なり、hard constraint
+ * （所有権・時刻妥当性・稼働時間内・固定予定との非重複・block同士の非重複・remainingMinutes
+ * 超過なし）だけを独立に再検証する。
+ */
+export function validateProposedBlocksAgainstConstraints(blocks: readonly ProposedTimeBlock[], window: PlanningWindow, store: TaskStore, googleBusy: readonly BusyInterval[]): { ok: true } | { ok: false; reason: string } {
+  const windowStart = new Date(window.start).getTime();
+  const windowEnd = new Date(window.end).getTime();
+  const activeTasks = new Map(store.tasks.filter((item) => !item.completedAt).map((item) => [item.id, item]));
+  const activeRoutines = new Set(store.routines.filter((item) => item.isActive).map((item) => item.id));
+  const busy = mergeBusyIntervals(googleBusy);
+  const sorted = [...blocks].sort((a, b) => a.start.localeCompare(b.start) || a.id.localeCompare(b.id));
+  const usedByTask = new Map<string, number>();
+
+  for (let index = 0; index < sorted.length; index += 1) {
+    const block = sorted[index];
+    const start = new Date(block.start).getTime();
+    const end = new Date(block.end).getTime();
+    if (!validInterval(start, end)) return { ok: false, reason: `${block.title}の時刻が不正です。` };
+    const duration = (end - start) / MINUTE;
+    if (!Number.isInteger(duration) || duration <= 0) return { ok: false, reason: `${block.title}は分単位で指定してください。` };
+    if (start < windowStart || end > windowEnd) return { ok: false, reason: `${block.title}が計画対象期間の外にあります。` };
+
+    const dateKey = tokyoDateKey(new Date(start));
+    if (!window.dates.includes(dateKey)) return { ok: false, reason: `${block.title}が計画対象日の外にあります。` };
+    const dayStart = instant(dateKey, window.workdayStart);
+    const dayEnd = instant(dateKey, window.workdayEnd);
+    if (start < dayStart || end > dayEnd) return { ok: false, reason: `${block.title}が稼働時間外です。` };
+
+    if (busy.some((item) => new Date(item.end).getTime() > start && new Date(item.start).getTime() < end)) {
+      return { ok: false, reason: `${block.title}が固定予定と重複しています。` };
+    }
+    for (let other = 0; other < index; other += 1) {
+      const otherBlock = sorted[other];
+      if (new Date(otherBlock.end).getTime() > start && new Date(otherBlock.start).getTime() < end) {
+        return { ok: false, reason: `${block.title}が他の予定と重複しています。` };
+      }
+    }
+
+    if (block.source === 'task') {
+      const task = block.taskId ? activeTasks.get(block.taskId) : undefined;
+      if (!block.taskId || !task) return { ok: false, reason: 'タスクの参照が不正です。' };
+      const used = (usedByTask.get(block.taskId) ?? 0) + duration;
+      usedByTask.set(block.taskId, used);
+      if (used > Math.max(0, Math.min(task.remainingMinutes, task.estimatedMinutes))) return { ok: false, reason: `${task.title}の残り時間を超えています。` };
+    } else {
+      if (!block.routineId || !activeRoutines.has(block.routineId)) return { ok: false, reason: 'ルーティンの参照が不正です。' };
+    }
+  }
+  return { ok: true };
 }

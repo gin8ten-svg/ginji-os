@@ -21,17 +21,23 @@ function providerError(error: unknown, signal?: AbortSignal): PlanningApiError {
   return new PlanningApiError('AI_PROVIDER_ERROR', 'AIの改善案を取得できませんでした。現在の計画案はそのまま利用できます。', 502);
 }
 
+export interface PlanningAdviceUsage { inputTokens: number | null; outputTokens: number | null }
+
 export class OpenAIPlanningAdvisor implements PlanningAdvisor {
   readonly model: string;
   private readonly client: OpenAI;
+  private usage: PlanningAdviceUsage | null = null;
   constructor(options: { apiKey?: string; model?: string; client?: OpenAI } = {}) {
     const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) throw new PlanningApiError('AI_NOT_CONFIGURED', 'AI Planning Adviceはまだ設定されていません。', 503);
     this.model = options.model ?? (process.env.OPENAI_PLANNING_MODEL?.trim() || DEFAULT_OPENAI_PLANNING_MODEL);
     this.client = options.client ?? new OpenAI({ apiKey, maxRetries: 0, timeout: 15_000 });
   }
+  /** 直近のadvise()呼び出しのトークン数。自由記述の本文やAI出力全文は保持しない。 */
+  lastUsage(): PlanningAdviceUsage | null { return this.usage; }
   async advise(input: PlanningAdviceInput, signal?: AbortSignal): Promise<PlanningAdvice> {
     if (signal?.aborted) throw cancelledError();
+    this.usage = null;
     try {
       const response = await this.client.responses.create({
         model: this.model,
@@ -40,6 +46,7 @@ export class OpenAIPlanningAdvisor implements PlanningAdvisor {
         text: { format: { type: 'json_schema', name: 'planning_advice', strict: true, schema: planningAdviceSchema(input) } },
         reasoning: { effort: 'none' }, max_output_tokens: 1_200, background: false, store: false,
       }, { signal });
+      if (response.usage) this.usage = { inputTokens: response.usage.input_tokens ?? null, outputTokens: response.usage.output_tokens ?? null };
       if (response.status !== 'completed') throw invalidResponseError();
       const refused = response.output.some((item) => item.type === 'message' && item.content.some((content) => content.type === 'refusal'));
       if (refused || !response.output_text) throw invalidResponseError();

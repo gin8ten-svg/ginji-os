@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const migration = readFileSync('supabase/migrations/20260803000100_google_calendar_write.sql', 'utf8');
 const eventIdValidationFix = readFileSync('supabase/migrations/20260803000200_fix_google_event_id_validation.sql', 'utf8');
 const eventManagement = readFileSync('supabase/migrations/20260803000300_google_calendar_event_management.sql', 'utf8');
+const execution = readFileSync('supabase/migrations/20260804000100_complete_planning_time_blocks.sql', 'utf8');
 const route = readFileSync('src/app/api/planning/sessions/[id]/write-to-calendar/route.ts', 'utf8');
 const server = readFileSync('src/lib/planning/server.ts', 'utf8');
 
@@ -89,5 +90,45 @@ describe('Google Calendar event management migration', () => {
   });
   it('削除済みeventをcreate APIが暗黙に再作成しない', () => {
     expect(eventManagement).toContain("write_record.calendar_event_state = 'deleted'"); expect(eventManagement).toContain("'result', 'EVENT_DELETED'");
+  });
+});
+
+describe('planning time block completion migration', () => {
+  it('auth.uid由来の所有権とSession・time block・task lockを同一transactionで確認', () => {
+    const signature = execution.slice(execution.indexOf('create function public.complete_planning_time_block('), execution.indexOf('returns jsonb'));
+    expect(signature).not.toMatch(/user_id/i);
+    expect(execution).toContain('current_user_id uuid := (select auth.uid())');
+    expect(execution).toMatch(/from public\.planning_sessions[\s\S]*for update;/);
+    expect(execution).toMatch(/from public\.time_blocks[\s\S]*for update;/);
+    expect(execution).toMatch(/from public\.tasks[\s\S]*for update;/);
+  });
+  it('完了済み再送でtask残り時間を二重減算せず、未記録の実績だけ追記可能', () => {
+    const completedBranch = execution.slice(execution.indexOf("if execution_record.status = 'completed'"), execution.indexOf("if execution_record.status not in"));
+    expect(completedBranch).toContain("'ACTUAL_RECORDED'");
+    expect(completedBranch).toContain("'ALREADY_COMPLETED'");
+    expect(completedBranch).not.toContain('update public.tasks');
+    expect(execution).toContain('remaining_minutes = next_remaining');
+  });
+  it('table直接UPDATEを開放せず専用RPCだけをauthenticatedへ公開', () => {
+    expect(execution).toContain('revoke all on function public.complete_planning_time_block(uuid, uuid, integer) from public, anon, authenticated');
+    expect(execution).toContain('grant execute on function public.complete_planning_time_block(uuid, uuid, integer) to authenticated');
+  });
+  it('完了・実績記録をaudit_logsへ記録し、actionのCHECK制約へ追加する', () => {
+    expect(execution).toContain("audit_logs_action_check check (action in");
+    expect(execution).toContain("'time_block_completed'");
+    const completedBranch = execution.slice(execution.indexOf("if execution_record.status = 'completed'"), execution.indexOf("if execution_record.status not in"));
+    expect(completedBranch).toContain('insert into public.audit_logs');
+    const finalBranch = execution.slice(execution.indexOf("if execution_record.status not in"));
+    expect(finalBranch).toContain('insert into public.audit_logs');
+    expect((execution.match(/insert into public\.audit_logs/g) ?? []).length).toBe(2);
+  });
+  it('完了・実績記録はcalendar書き込み状態や紐づくGoogle Event IDを一切変更しない', () => {
+    const updateStatements = [...execution.matchAll(/update public\.time_blocks\s+set([\s\S]*?)where/g)].map((match) => match[1]);
+    expect(updateStatements.length).toBeGreaterThan(0);
+    const calendarColumns = ['calendar_write_status', 'calendar_write_attempt_token', 'calendar_write_lease_until', 'calendar_write_attempt_count', 'calendar_write_error_code', 'written_at', 'google_calendar_id', 'google_event_id', 'calendar_event_state', 'calendar_mutation_status', 'calendar_mutation_attempt_token', 'calendar_mutation_lease_until', 'calendar_mutation_attempt_count', 'calendar_mutation_error_code', 'calendar_updated_at', 'calendar_deleted_at'];
+    for (const statement of updateStatements) {
+      for (const column of calendarColumns) expect(statement).not.toContain(column);
+    }
+    expect(execution).not.toMatch(/update public\.time_blocks[\s\S]*?set[\s\S]*?calendar_write_status\s*=/);
   });
 });

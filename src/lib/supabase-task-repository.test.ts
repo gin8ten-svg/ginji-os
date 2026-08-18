@@ -30,6 +30,7 @@ class StubQuery implements PromiseLike<QueryResult> {
   order() { return this; }
   eq(column: string, value: unknown) { this.filters.push([column, value]); return this; }
   single(): Promise<QueryResult> { return Promise.resolve(this.owner.result(this.table, this.operation)); }
+  maybeSingle(): Promise<QueryResult> { return Promise.resolve(this.owner.result(this.table, this.operation)); }
   then<TResult1 = QueryResult, TResult2 = never>(
     onfulfilled?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
@@ -118,9 +119,21 @@ describe('SupabaseTaskRepository UUID handling', () => {
     await repository.deleteTask(dbTaskId);
     const taskWrites = fake.calls.filter((call) => call.table === 'tasks' && (call.operation === 'update' || call.operation === 'delete'));
     expect(taskWrites.map((call) => call.filters)).toEqual([
-      [['id', dbTaskId], ['user_id', 'user-id']],
+      [['id', dbTaskId], ['user_id', 'user-id'], ['updated_at', timestamps.updated_at]],
       [['id', dbTaskId], ['user_id', 'user-id']],
     ]);
+  });
+
+  it('updated_atが一致しないUPDATEは競合として拒否する', async () => {
+    const fake = new FakeSupabase();
+    fake.queue('tasks', 'update', { data: null, error: null });
+    fake.queue('categories', 'select', { data: [], error: null });
+    const repository = new SupabaseTaskRepository(fake.client(), 'user-id');
+
+    await expect(repository.updateTask(appTask(dbTaskId))).rejects.toEqual(expect.objectContaining({
+      name: 'SupabaseRepositoryError',
+      message: 'タスク更新に失敗しました: 他の操作でこのタスクが更新されています。画面を再読み込みしてから編集してください。',
+    } satisfies Partial<SupabaseRepositoryError>));
   });
 
   it('categoryとroutine completionのINSERT payloadにもidを含めない', async () => {

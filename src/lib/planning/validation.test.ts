@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assertPlanningIdempotencyKey, assertPlanningSessionId, planningCalendarWriteTarget } from '@/lib/planning/validation';
+import { assertPlanningBlockId, assertPlanningIdempotencyKey, assertPlanningSessionId, planningActualMinutes, planningBlockUpdatePayload, planningCalendarWriteTarget, planningEstimationRangeDays, planningReviewDate, planningSkipReason } from '@/lib/planning/validation';
 
 const { authenticatedPlanningClient } = vi.hoisted(() => ({ authenticatedPlanningClient: vi.fn() }));
 vi.mock('@/lib/planning/server', () => ({
@@ -50,6 +50,49 @@ describe('planning Calendar write target validation', () => {
     authenticatedPlanningClient.mockClear();
     const response = await writeToCalendar(new Request('http://localhost/api/planning/sessions/11111111-1111-4111-8111-111111111111/write-to-calendar', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ calendarId: 'primary', title: 'client-title' }) }), { params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111111' }) });
     expect(response.status).toBe(400); expect(authenticatedPlanningClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('planning execution validation', () => {
+  it('block UUIDとnullまたは0以上の整数だけを受け入れる', () => {
+    expect(() => assertPlanningBlockId('44444444-4444-4444-8444-444444444444')).not.toThrow();
+    expect(() => assertPlanningBlockId('bad')).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+    expect(planningActualMinutes({ actualMinutes: null })).toBeNull();
+    expect(planningActualMinutes({ actualMinutes: 0 })).toBe(0);
+    expect(planningActualMinutes({ actualMinutes: 45 })).toBe(45);
+    for (const value of [{}, { actualMinutes: -1 }, { actualMinutes: 1.5 }, { actualMinutes: '45' }, { actualMinutes: 45, title: 'client-title' }]) expect(() => planningActualMinutes(value)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+  });
+});
+
+describe('planning block update payload validation', () => {
+  it('{start,end}または{taskId}のどちらかだけを受け入れる', () => {
+    expect(planningBlockUpdatePayload({ start: '2026-07-15T10:00', end: '2026-07-15T11:00' })).toEqual({ kind: 'time', start: '2026-07-15T10:00', end: '2026-07-15T11:00' });
+    expect(planningBlockUpdatePayload({ taskId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })).toEqual({ kind: 'task', taskId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
+    for (const value of [{}, { start: '2026-07-15T10:00' }, { start: 'bad', end: '2026-07-15T11:00' }, { taskId: 'not-a-uuid' }, { start: '2026-07-15T10:00', end: '2026-07-15T11:00', taskId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }]) {
+      expect(() => planningBlockUpdatePayload(value)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+    }
+  });
+});
+
+describe('planning skip reason validation', () => {
+  it('user_skippedとcarried_overだけを受け入れる', () => {
+    expect(planningSkipReason({ reason: 'user_skipped' })).toBe('user_skipped');
+    expect(planningSkipReason({ reason: 'carried_over' })).toBe('carried_over');
+    for (const value of [{}, { reason: 'other' }, { reason: 'user_skipped', extra: 1 }, { reason: 1 }]) expect(() => planningSkipReason(value)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+  });
+});
+
+describe('planning review query validation', () => {
+  it('date未指定はfallbackを返し、YYYY-MM-DD以外は拒否する', () => {
+    expect(planningReviewDate(null, '2026-07-15')).toBe('2026-07-15');
+    expect(planningReviewDate('2026-07-15', '2026-07-01')).toBe('2026-07-15');
+    for (const value of ['2026/07/15', '2026-13-01', 'not-a-date', '']) expect(() => planningReviewDate(value, '2026-07-15')).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
+  });
+  it('daysは未指定でfallback、7〜90の整数以外は拒否する', () => {
+    expect(planningEstimationRangeDays(null)).toBe(30);
+    expect(planningEstimationRangeDays('7')).toBe(7);
+    expect(planningEstimationRangeDays('90')).toBe(90);
+    for (const value of ['6', '91', '30.5', 'abc']) expect(() => planningEstimationRangeDays(value)).toThrow(expect.objectContaining({ code: 'INVALID_REQUEST', status: 400 }));
   });
 });
 

@@ -118,6 +118,7 @@ immutable block・所有関係・対象Calendarを再検証する。両操作と
 - `GOOGLE_OAUTH_CLIENT_SECRET`
 - `CALENDAR_TOKEN_ENCRYPTION_KEY`
 - `NEXT_PUBLIC_APP_URL`
+- `AI_ADVICE_MONTHLY_CALL_LIMIT`（任意、AI Advice月間呼び出し上限の目安。既定200）
 
 OpenAI APIキー、Googleクライアントシークレットはサーバー専用。現在のSupabase基盤はservice roleキーを使用しない。
 
@@ -128,31 +129,43 @@ OpenAI APIキー、Googleクライアントシークレットはサーバー専�
 - Source: GitHub
 - Preview deployments: Pull Request単位
 
-## 7. Proposed directory
+## 7. Directory structure
+
+計画段階の構成案（route group、`components/{ui,tasks,calendar,planner}`、`lib/{db,validation}`、独立`tests/`）から実装時に以下へ変化した。route groupは導入せずフラットな`app/`配下にpage・API routeを置き、コンポーネントは`components/`直下にフラット配置、テストはミラーツリーではなく対象ファイルにco-locate（`foo.ts`に対し`foo.test.ts`）している。`lib/`はドメインごとに`auth/calendar/planner/planning/supabase`のサブディレクトリへ分割し、決定論的Planning Engine（`lib/planner/`）とPlanning SessionのDB/API層（`lib/planning/`）は責務が異なるため統合していない。
 
 ```text
-app/
-  (auth)/
-  today/
-  tasks/
-  calendar/
-  planner/
-  review/
-  api/
-components/
-  ui/
-  tasks/
-  calendar/
-  planner/
-lib/
-  auth/
-  db/
-  calendar/
-  planner/
-  validation/
-types/
+src/
+  app/
+    page.tsx, layout.tsx, error.tsx, globals.css
+    today/ tasks/ calendar/ review/ login/   （各page.tsx）
+    auth/callback/, auth/logout/             （route.ts）
+    api/
+      calendar/{calendars,connect,connection,events}/route.ts
+      planning/
+        review/route.ts
+        sessions/route.ts
+        sessions/[id]/route.ts
+        sessions/[id]/{advice,approve,reject,calendar-preview,write-to-calendar}/route.ts
+        sessions/[id]/execution/route.ts
+        sessions/[id]/execution/[blockId]/complete/route.ts
+  components/        フラット配置（app-shell, planner-panel, planning-execution,
+                      planning-review, calendar-event-preview, task-form-modal,
+                      routine-form-modal, task-data-provider 等）
+  lib/
+    auth/            get-user.ts, oauth-options.ts, urls.ts
+    calendar/        google-api.ts, connection.ts, token-crypto.ts, event-dates.ts 等
+    planner/         engine.ts（決定論的Planning Engine）, calendar-input.ts
+    planning/        server.ts（DB/RPC層）, advisor.ts, openai-advisor.ts, client.ts,
+                      validation.ts, hash.ts, input-snapshot-v2.ts, approval-ui.ts
+    supabase/        client.ts, server.ts, env.ts, converters.ts, proxy.ts
+    直下ファイル      date-time.ts, task-repository.ts, supabase-task-repository.ts,
+                      task-planning.ts, practical-mvp.ts, mock-data.ts,
+                      repository-mode.ts, submission-gate.ts, task-store-adapter.ts
+  types/             calendar.ts, planning.ts, planning-session.ts, tasks.ts, database.ts
+  test/              server-only.ts（vitest用のserver-onlyダミーモック）
 supabase/
   migrations/
-tests/
 docs/
 ```
+
+テストは各モジュールへの co-location を採用しており（例: `src/lib/planning/server.test.ts`）、独立した`tests/`ツリーは持たない。実DBに接続する統合テストは`supabase/tests/`（`docs/TESTING.md`参照）に分離し、`src/**/*.test.ts`（`npm run test`、CI対象）とは明確に区別する。

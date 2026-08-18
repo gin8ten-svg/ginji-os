@@ -6,7 +6,9 @@ import type { PlanningWindow } from '@/types/planning';
 import type { Routine, RoutineCompletion, Task } from '@/types/tasks';
 
 export const PLANNING_INPUT_SNAPSHOT_VERSION = 'planning-input-v2' as const;
-export const PLANNING_ENGINE_VERSION = 'deterministic-v2' as const;
+// v3: 候補順序付けにdocs/SCHEDULING_RULES.md §3のスコア式(candidateBaseScore)を追加。
+// 既存の承認前draftは再計算結果と一致しなくなる可能性があるため、versionを上げてstale化する。
+export const PLANNING_ENGINE_VERSION = 'deterministic-v3' as const;
 export const PLANNING_TITLE_MAX_LENGTH = 200;
 export const PLANNING_SNAPSHOT_MAX_BYTES = 1_000_000;
 export const PLANNING_SNAPSHOT_MAX_ENTITIES = 1_000;

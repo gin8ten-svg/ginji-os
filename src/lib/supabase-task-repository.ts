@@ -80,8 +80,9 @@ export class SupabaseTaskRepository {
       remaining_minutes: task.remainingMinutes, splittable: task.splittable,
       minimum_block_minutes: task.minimumBlockMinutes, category_id: categoryId,
       completed_at: task.completedAt,
-    }).eq('id', task.id).eq('user_id', this.userId).select('*').single();
+    }).eq('id', task.id).eq('user_id', this.userId).eq('updated_at', task.updatedAt).select('*').maybeSingle();
     if (error) throw new SupabaseRepositoryError('タスク更新', error.message);
+    if (!data) throw new SupabaseRepositoryError('タスク更新', '他の操作でこのタスクが更新されています。画面を再読み込みしてから編集してください。');
     return taskFromRow(data, categoryId ? new Map([[categoryId, task.category.trim()]]) : new Map());
   }
 

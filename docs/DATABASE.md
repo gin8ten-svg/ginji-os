@@ -164,6 +164,15 @@ status/hash/revision/Calendarを再確認する `reserve_calendar_event_write` �
 作成済み予定の更新・削除は、同じ所有関係をlockする`reserve_calendar_event_mutation`と、attempt tokenを照合する
 `complete_calendar_event_mutation`だけを使う。削除済みeventは追加RPCから暗黙に再作成しない。
 
+タスクblockの完了と実績時間は`complete_planning_time_block`だけで更新する。RPCは`auth.uid()`から所有者を確定し、
+approvedまたはsuperseded Session、Google Calendar書き込み成功済みの`time_blocks`、参照先taskを同一transactionでlockする。
+初回完了時だけ予定block分をtaskの`remaining_minutes`から減らし、0分になったtaskを完了にする。完了済みblockの再送では
+残り時間を再度減らさず、`actual_minutes`が未記録の場合だけ後から実績値を追記できる。この操作はGoogle Calendarを変更しない。
+状態が変化する完了・実績記録は`time_block_completed`としてaudit_logsへ記録する。
+
+V2 snapshot移行前に承認済みだったSession（`input_snapshot_version`が`null`）は実行Previewの取得時にsnapshotの
+titleを使わず、`tasks`テーブルの現在のtitleへfallbackする。
+
 ## audit_logs
 
 | Column | Type |
@@ -186,6 +195,17 @@ AI相談の同一ユーザー並列実行をDB時刻で原子的に抑止する�
 `auth.users(id)` を参照する主キーで、`reserved_at` と `updated_at` を保持する。RLSを有効にしたうえで
 `anon` / `authenticated` の直接テーブル権限を剥奪し、引数なしの `reserve_ai_advice_request()` だけを
 `authenticated` が実行できる。関数は内部の `auth.uid()` と単一UPSERTを使い、30秒境界を判定する。
+
+## ai_advice_usage_events
+
+AI Advice呼び出しの利用量監視用テーブル。`user_id`（`auth.users`参照）、`planning_session_id`（`planning_sessions`参照、
+`on delete set null`）、`model`、`candidate_count`、`input_tokens`/`output_tokens`（nullable）、`success`、`error_code`
+（nullable）、`created_at` を保持する。自由記述・AI出力全文・ユーザー識別子は保存しない。RLSで own SELECTだけを許可し、
+`anon`/`authenticated`への直接テーブル書き込み権限は付与せず、`record_ai_advice_usage(...)`のSECURITY DEFINER RPCだけが
+`authenticated`から呼び出せる。関数は`auth.uid()`で行の所有者を固定し、渡された`planning_session_id`が呼び出し本人の
+Sessionでない場合はNULL化して記録を継続する（他人のSessionへは紐付けない）。成功・失敗いずれの呼び出しでも記録し、
+記録自体の失敗はAI Advice機能の成否をブロックしない（ベストエフォート）。概算コストは`src/lib/planning/ai-pricing.ts`の
+単価定数から算出し、実際の請求額とは一致しない。
 
 ## RLS policy principle
 

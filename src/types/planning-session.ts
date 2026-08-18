@@ -1,7 +1,7 @@
 import type { ProposedTimeBlock, UnscheduledRoutine, UnscheduledTask } from '@/types/planning';
 
 export type PlanningSessionStatus = 'draft' | 'approved' | 'rejected' | 'superseded';
-export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'CALENDAR_EVENT_NOT_FOUND' | 'CALENDAR_EVENT_MISMATCH' | 'CALENDAR_EVENT_CONFLICT' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
+export type PlanningErrorCode = 'INVALID_REQUEST' | 'AUTH_REQUIRED' | 'CALENDAR_NOT_CONNECTED' | 'CALENDAR_RECONNECT_REQUIRED' | 'CALENDAR_NOT_WRITABLE' | 'CALENDAR_TARGET_MISMATCH' | 'CALENDAR_WRITE_FAILED' | 'CALENDAR_EVENT_NOT_FOUND' | 'CALENDAR_EVENT_MISMATCH' | 'CALENDAR_EVENT_CONFLICT' | 'PLAN_NOT_FOUND' | 'PLAN_NOT_DRAFT' | 'PLAN_NOT_APPROVED' | 'PLAN_STALE' | 'PLAN_INVALID' | 'TIME_BLOCK_NOT_FOUND' | 'TIME_BLOCK_NOT_COMPLETABLE' | 'TIME_BLOCK_NOT_SKIPPABLE' | 'TIME_BLOCK_NOT_YET_ENDED' | 'PLAN_BLOCK_NOT_FOUND' | 'PLAN_BLOCK_OVERLAPS' | 'PERSISTENCE_FAILED' | 'AI_NOT_CONFIGURED' | 'AI_RATE_LIMITED' | 'AI_TIMEOUT' | 'AI_PROVIDER_ERROR' | 'AI_INVALID_RESPONSE' | 'AI_INPUT_TOO_LARGE' | 'AI_REQUEST_CANCELLED';
 
 export interface PlanningAdviceView {
   advisorVersion: string; model: string; globalSummary: string; warnings: string[];
@@ -13,7 +13,7 @@ export interface PlanningSessionDetail {
   blocks: ProposedTimeBlock[]; unscheduledTasks: UnscheduledTask[]; unscheduledRoutines: UnscheduledRoutine[];
   warnings: string[]; engineVersion: string; createdAt: string;
   approvedAt: string | null; rejectedAt: string | null;
-  advice: PlanningAdviceView | null;
+  advice: PlanningAdviceView | null; manuallyEdited: boolean;
 }
 
 export interface PlanningSessionSummary {
@@ -65,6 +65,59 @@ export interface PlanningCalendarEventMutationResult {
   needsReconnect: boolean; events: PlanningCalendarEventMutationItem[];
 }
 
+export type PlanningSkipReason = 'user_skipped' | 'carried_over';
+
+export interface PlanningExecutionBlock {
+  planningBlockId: string; taskId: string; title: string; start: string; end: string;
+  plannedMinutes: number; status: 'approved' | 'in_progress' | 'completed' | 'skipped';
+  statusReason: PlanningSkipReason | null; actualMinutes: number | null;
+}
+
+export interface PlanningExecutionPreview {
+  sessionId: string; status: 'approved' | 'superseded'; timeZone: 'Asia/Tokyo'; blocks: PlanningExecutionBlock[];
+}
+
+export interface PlanningExecutionResult {
+  planningBlockId: string; status: 'completed'; actualMinutes: number | null;
+  outcome: 'completed' | 'already_completed' | 'actual_recorded'; taskCompleted: boolean;
+}
+
+export interface PlanningSkipResult {
+  planningBlockId: string; status: 'skipped'; statusReason: PlanningSkipReason;
+  outcome: 'skipped' | 'already_skipped';
+}
+
+export interface PlanningReviewDay {
+  date: string; plannedMinutes: number; actualMinutes: number;
+  totalBlocks: number; completedBlocks: number; recordedActualBlocks: number;
+}
+
+export interface PlanningReview {
+  timeZone: 'Asia/Tokyo'; days: PlanningReviewDay[];
+}
+
+export interface PlanningDailyReviewBlock {
+  taskId: string; title: string; start: string; end: string; plannedMinutes: number;
+  status: 'approved' | 'in_progress' | 'completed' | 'skipped';
+  statusReason: PlanningSkipReason | null; actualMinutes: number | null;
+}
+
+export interface PlanningDailyReview {
+  date: string; timeZone: 'Asia/Tokyo'; blocks: PlanningDailyReviewBlock[];
+  summary: { completed: number; skipped: number; pending: number; plannedMinutes: number; actualMinutes: number };
+}
+
+export interface EstimationAccuracyItem {
+  taskId: string; title: string; plannedMinutes: number; actualMinutes: number; varianceMinutes: number;
+}
+
+export interface EstimationAccuracySummary {
+  rangeDays: number; sampleSize: number; totalPlannedMinutes: number; totalActualMinutes: number;
+  averageVarianceMinutes: number; averageVariancePercent: number | null;
+  overEstimatedCount: number; underEstimatedCount: number; accurateCount: number;
+  items: EstimationAccuracyItem[];
+}
+
 export interface PlanningAdviceCandidate {
   alias: string; sourceType: 'task' | 'routine'; priority: number; deterministicRank: number;
   overdue?: boolean; dueInMinutes?: number | null; remainingMinutes?: number; estimatedMinutes?: number;
@@ -78,3 +131,9 @@ export interface PlanningAdviceInput {
 }
 export interface PlanningAdvice { orderedSourceIds: string[]; explanationBySourceId: Record<string, string>; globalSummary: string; warnings: string[] }
 export interface PlanningAdvisor { advise(input: PlanningAdviceInput, signal?: AbortSignal): Promise<PlanningAdvice> }
+
+export interface AiAdviceUsageSummary {
+  monthStart: string; totalCalls: number; successfulCalls: number; failedCalls: number;
+  totalInputTokens: number; totalOutputTokens: number; estimatedCostUsd: number;
+  monthlyCallLimit: number | null; nearMonthlyLimit: boolean;
+}
