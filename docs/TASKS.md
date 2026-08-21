@@ -94,7 +94,7 @@
 TASKS.md記載の全項目を実装済み。
 
 - [x] ローカルSupabase（`supabase start` → `supabase db reset`）で`npm run test:integration`を実行し、RLS分離テストと並列transaction/CASCADE実証を確認する（`docs/TESTING.md`参照。2026-08-18、Docker Desktop起動のうえ実施、16件全パス）。
-- [x] 一連のフロー（ログイン→タスク→計画生成→承認→Calendar書込→完了→週次レビュー各セクション表示）を本番環境（`ginji-os.vercel.app`）・実Google Calendar接続ありで通しで手動確認した（2026-08-18）。手動編集・スキップ・持ち越しは未確認のまま残っている。
+- [x] 一連のフロー（ログイン→タスク→計画生成→手動編集→承認→Calendar書込→スキップ→週次レビュー各セクション表示）を本番環境（`ginji-os.vercel.app`）・実Google Calendar接続ありで通しで手動確認した（2026-08-18、2026-08-21）。持ち越し（carried_over）のUI操作のみ未確認のまま残っている。
 
 ### 2026-08-18の手動確認で発覚し対応した問題
 
