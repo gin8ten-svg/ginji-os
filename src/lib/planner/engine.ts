@@ -17,7 +17,8 @@ const validInterval = (start: number, end: number) => Number.isFinite(start) && 
 export function createPlanningWindow(now = new Date()): PlanningWindow {
   const firstDate = tokyoDateKey(now);
   const dates = Array.from({ length: 7 }, (_, index) => shiftTokyoDate(firstDate, index));
-  const start = Math.max(now.getTime(), instant(firstDate, DAY_START));
+  const nowAlignedToMinute = Math.ceil(now.getTime() / MINUTE) * MINUTE;
+  const start = Math.max(nowAlignedToMinute, instant(firstDate, DAY_START));
   return { start: iso(start), end: iso(instant(shiftTokyoDate(firstDate, 7), DAY_START)), timeZone: 'Asia/Tokyo', workdayStart: DAY_START, workdayEnd: DAY_END, minimumSlotMinutes: MIN_SLOT, dates };
 }
 

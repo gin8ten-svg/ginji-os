@@ -52,6 +52,14 @@ describe('Planner busy/free normalization', () => {
     expect(slots).toContainEqual({ start: iso('2026-07-15', '09:00'), end: iso('2026-07-15', '21:00') });
     expect(slots).toContainEqual({ start: iso('2026-07-16', '09:00'), end: iso('2026-07-16', '22:00') });
   });
+
+  it('秒・ミリ秒を含むnowでもwindow.startを分単位へ切り上げる（planning_blocks_minute_aligned_check制約対応）', () => {
+    const nowWithSeconds = new Date('2026-07-15T08:12:34.567Z'); // 17:12:34.567 Asia/Tokyo
+    const window = createPlanningWindow(nowWithSeconds);
+    expect(new Date(window.start).getUTCSeconds()).toBe(0);
+    expect(new Date(window.start).getUTCMilliseconds()).toBe(0);
+    expect(window.start).toBe('2026-07-15T08:13:00.000Z');
+  });
 });
 
 describe('Deterministic task and routine placement', () => {
