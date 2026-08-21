@@ -102,3 +102,7 @@ TASKS.md記載の全項目を実装済み。
 - Google Calendar接続のrefresh tokenが失効していた（最終接続2026/08/03、Testing公開状態のtoken 7日失効が原因と推測）→ 接続解除→再接続で復旧
 - 本番`main`ブランチが2026/08/04時点（PR #6）で止まっており、Milestone 5後半〜6（完了/スキップ/持ち越し・日次振り返り・週次レビュー・見積もり誤差・AI利用状況・統合テスト）4コミットが未マージ・未デプロイだった → PR #7を作成・マージし本番デプロイ（https://github.com/gin8ten-svg/ginji-os/pull/7）
 - 上記に伴うmigration 4件（`20260804000100`〜`20260810000100`、`ai_advice_usage_events`テーブル含む）が本番Supabaseに未適用で、Review画面の「日次振り返り」「AI利用状況」がAPI 500エラーになっていた → `supabase db push`で適用し解消（同時に存在した無関係な進行中作業のmigration 5件は一時退避して触れずに実施）
+
+### 2026-08-21に発覚し対応した重大バグ
+
+- **新規の計画作成・再計算が本番で全て失敗する状態だった**（`計画案を保存できませんでした。`/`PERSISTENCE_FAILED`）。原因は、コミット`3fd4244`（2026-08-12）で`PLANNING_ENGINE_VERSION`を`deterministic-v2`→`deterministic-v3`へ上げた際、DB関数`create_planning_session_v2`（`supabase/migrations/20260715001000_planning_input_snapshot_v2.sql`）側の許可バージョンチェックが`deterministic-v2`のままハードコードされて更新されていなかったこと。2026-08-18にPR #7をマージし本番へ`deterministic-v3`のアプリコードがデプロイされて以降、本番の計画作成が壊れていた（ローカル統合テストはこの経路を直接検証していなかったため未検出）。`supabase/migrations/20260821000100_fix_planning_engine_v3.sql`で許可バージョンを`deterministic-v3`へ更新し解消。実際に計画再作成が201で成功することを確認済み。
