@@ -7,9 +7,11 @@ import { ErrorState } from '@/components/error-state';
 import { LoadingState } from '@/components/loading-state';
 import { TaskFormModal } from '@/components/task-form-modal';
 import { PlannerPanel } from '@/components/planner-panel';
+import { TodayNow } from '@/components/today-now';
 import { useTaskData } from '@/components/task-data-provider';
 import { formatDueAt, isRoutineScheduled, tokyoDateKey } from '@/lib/date-time';
 import { isOverdueTask, todayDashboardTasks } from '@/lib/practical-mvp';
+import { buildTodayView } from '@/lib/today';
 import { toggleTaskCompletion } from '@/lib/task-planning';
 import { useTokyoDateKey } from '@/lib/use-tokyo-date';
 import type { Task } from '@/types/tasks';
@@ -26,6 +28,10 @@ export default function TodayPage() {
   const remainingMinutes = tasks.reduce((sum, task) => sum + task.remainingMinutes, 0)
     + routines.filter((routine) => !completedRoutineIds.has(routine.id)).reduce((sum, routine) => sum + routine.estimatedMinutes, 0);
   const dateLabel = today ? new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date(`${today}T12:00:00+09:00`)) : '日付を確認中';
+  const progress = useMemo(
+    () => today && store ? buildTodayView({ now: new Date(), today, tasks: store.tasks, routines: store.routines, completions: store.routineCompletions, events: [] }).progress : null,
+    [store, today],
+  );
 
   const toggleTask = (task: Task) => { void saveTask(toggleTaskCompletion(task)).catch(() => undefined); };
 
@@ -41,10 +47,20 @@ export default function TodayPage() {
     {isLoading || !today ? <LoadingState /> : null}
 
     {!isLoading && today && store ? <>
+      <TodayNow store={store} today={today} isAuthenticated={isAuthenticated} />
+
+      <section aria-label="今日の進捗" className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-baseline justify-between"><h3 className="text-lg font-semibold">今日の進捗</h3><span className="text-sm font-semibold tabular-nums text-slate-700">{progress && progress.totalCount ? `${progress.percent}%` : '対象なし'}</span></div>
+        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuenow={progress?.percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label="今日の完了率">
+          <div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${progress?.percent ?? 0}%` }} />
+        </div>
+        <p className="mt-2 text-sm text-slate-600">{progress ? `${progress.doneCount}/${progress.totalCount} 完了・今日締切の残り${progress.remainingMinutes}分` : ''}</p>
+      </section>
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Metric label="今日の完了" value={`${todayCompletedTasks + completedRoutines}件`} />
         <Metric label="残り時間" value={`${remainingMinutes}分`} />
-        <Metric label="未完了タスク" value={`${tasks.length}件`} />
+        <Metric label="要対応タスク" value={`${tasks.length}件`} />
         <Metric label="ルーティン" value={`${completedRoutines}/${routines.length}`} />
       </div>
 
