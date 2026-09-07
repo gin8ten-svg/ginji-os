@@ -51,12 +51,21 @@ export function TaskDataProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       try {
         const configured = Boolean(getSupabasePublicEnv());
+        let cloudUnreachable = false;
         if (configured) {
           const client = createClient();
-          const { data, error: authError } = await client.auth.getUser();
-          if (authError && authError.name !== 'AuthSessionMissingError') throw authError;
-          if (repositoryMode(configured, data.user?.id) === 'supabase' && data.user) {
-            const adapter = new SupabaseTaskStoreAdapter(new SupabaseTaskRepository(client, data.user.id));
+          let userId: string | undefined;
+          try {
+            const { data, error: authError } = await client.auth.getUser();
+            if (authError && authError.name !== 'AuthSessionMissingError') throw authError;
+            userId = data.user?.id;
+          } catch {
+            // Supabaseへ到達できない（プロジェクト一時停止・DNS不通・オフライン等）場合は
+            // 致命エラーにせず、端末内データ（Localモード）で継続する。
+            cloudUnreachable = true;
+          }
+          if (!cloudUnreachable && repositoryMode(configured, userId) === 'supabase' && userId) {
+            const adapter = new SupabaseTaskStoreAdapter(new SupabaseTaskRepository(client, userId));
             const result = await adapter.load();
             if (!active) return;
             adapterRef.current = adapter;
@@ -71,7 +80,8 @@ export function TaskDataProvider({ children }: { children: React.ReactNode }) {
         adapterRef.current = adapter;
         setIsAuthenticated(false);
         setStore(result.store);
-        if (result.recovered) setRecoveryNotice('破損した保存データを退避し、安全な初期状態へ復旧しました。');
+        if (cloudUnreachable) setRecoveryNotice('クラウドに接続できないため、端末内のデータで表示しています。接続が戻ったら再読み込みしてください。');
+        else if (result.recovered) setRecoveryNotice('破損した保存データを退避し、安全な初期状態へ復旧しました。');
       } catch (loadError) {
         if (!active) return;
         setError(loadError instanceof Error ? loadError.message : 'データを読み込めませんでした。');
