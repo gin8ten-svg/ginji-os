@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CalendarEventPreview } from '@/components/calendar-event-preview';
+import { ModalShell } from '@/components/modal-shell';
 import { PlanningBlockEditor } from '@/components/planning-block-editor';
 import { PlanningExecution } from '@/components/planning-execution';
 import { getCalendarConnection, getCalendarEvents } from '@/lib/calendar/client';
@@ -47,13 +48,6 @@ export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store:
     }).finally(() => { if (activeCoordinator.isCurrent(request.generation)) setRestoring(false); });
     return () => activeCoordinator.abort();
   }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (!confirming) return;
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && canCloseApprovalModal(loading)) setConfirming(false); };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [confirming, loading]);
 
   async function calculate() {
     const request = coordinator.current.begin();
@@ -130,7 +124,7 @@ export function PlannerPanel({ store, isAuthenticated, onTaskUpdated }: { store:
         : <Block key={block.id} block={block} />)}</div></section>)}</div>
       {session.unscheduledTasks.length ? <section className="rounded-2xl bg-amber-50 p-4"><h4 className="font-semibold">配置できなかったタスク</h4>{session.unscheduledTasks.map((item) => <p key={item.taskId} className="mt-2 text-sm">{item.title} — {item.reason}</p>)}</section> : null}
     </div> : null}
-    {confirming && session ? <div role="dialog" aria-modal="true" aria-labelledby="approval-title" onMouseDown={(event) => { if (canCloseApprovalModal(loading) && event.target === event.currentTarget) setConfirming(false); }} className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4"><div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl"><h4 id="approval-title" className="text-lg font-semibold">計画案を承認しますか？</h4><p className="mt-2 text-sm text-slate-600">最新データで再検証します。この時点ではGoogle Calendarへ書き込みません。</p><div className="mt-3 grid grid-cols-3 gap-2 text-center text-sm"><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">期間</p><p className="mt-1 font-semibold">{fullDate(session.windowStart)}〜</p></div><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">配置</p><p className="mt-1 font-semibold">{session.blocks.length}件</p></div><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">合計予定</p><p className="mt-1 font-semibold">{minutes}分</p></div></div>{session.manuallyEdited ? <p className="mt-3 rounded-xl bg-cyan-50 p-3 text-sm text-cyan-900">この計画案は手動編集されています。承認時に重複・稼働時間・残り時間などの安全性を再検証します。</p> : null}{error ? <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={loading} onClick={() => setConfirming(false)} className="min-h-11 rounded-full px-4 disabled:opacity-50">キャンセル</button><button type="button" disabled={loading} onClick={() => void approve()} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? '承認中…' : '承認する'}</button></div></div></div> : null}
+    {confirming && session ? <ModalShell labelledBy="approval-title" onClose={() => setConfirming(false)} closeDisabled={!canCloseApprovalModal(loading)}><h4 id="approval-title" className="text-lg font-semibold">計画案を承認しますか？</h4><p className="mt-2 text-sm text-slate-600">最新データで再検証します。この時点ではGoogle Calendarへ書き込みません。</p><div className="mt-3 grid grid-cols-3 gap-2 text-center text-sm"><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">期間</p><p className="mt-1 font-semibold">{fullDate(session.windowStart)}〜</p></div><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">配置</p><p className="mt-1 font-semibold">{session.blocks.length}件</p></div><div className="rounded-xl bg-slate-50 p-2"><p className="text-xs text-slate-500">合計予定</p><p className="mt-1 font-semibold">{minutes}分</p></div></div>{session.manuallyEdited ? <p className="mt-3 rounded-xl bg-cyan-50 p-3 text-sm text-cyan-900">この計画案は手動編集されています。承認時に重複・稼働時間・残り時間などの安全性を再検証します。</p> : null}{error ? <p role="alert" className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={loading} onClick={() => setConfirming(false)} className="min-h-11 rounded-full px-4 disabled:opacity-50">キャンセル</button><button type="button" disabled={loading} onClick={() => void approve()} className="min-h-11 rounded-full bg-emerald-700 px-4 font-semibold text-white disabled:opacity-50">{loading ? '承認中…' : '承認する'}</button></div></ModalShell> : null}
   </section>;
 }
 

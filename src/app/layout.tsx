@@ -5,7 +5,7 @@ import { TaskDataProvider } from '@/components/task-data-provider';
 
 export const metadata: Metadata = {
   title: 'Ginji OS',
-  description: 'A mobile-first planning prototype for daily task orchestration.',
+  description: 'ToDoと固定予定から毎日の実行計画を組み立てる、個人向けスケジュール管理アプリ。',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

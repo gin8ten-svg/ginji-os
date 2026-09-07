@@ -87,7 +87,9 @@ export function TaskDataProvider({ children }: { children: React.ReactNode }) {
   }, [loadVersion, localRepository]);
 
   const runOperation = useCallback(async (operation: (adapter: AsyncTaskStoreAdapter) => Promise<TaskStore>, message: string) => {
-    if (savingRef.current) throw new Error('保存処理が進行中です。');
+    // 進行中の保存があるあいだの重複操作（モバイルでのボタン連打など）は、
+    // エラーを見せずに黙って無視する。UI側のdisabled状態と合わせた二重防御。
+    if (savingRef.current) return;
     const adapter = adapterRef.current;
     if (!adapter) throw new Error('データをまだ読み込んでいます。');
     savingRef.current = true;
