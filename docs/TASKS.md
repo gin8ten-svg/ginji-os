@@ -52,7 +52,7 @@
 ## Milestone 4 — Planner proposal
 
 - [x] 制約エンジン
-- [x] 優先順位スコア（priority/urgency/overdue。goal_weightは常に0、fragmentation/context_switchは未統合）
+- [x] 優先順位スコア（priority/urgency/overdue。goal_weightは常に0。fragmentation/context_switchは配置アルゴリズム再設計時の将来課題として基礎スコアには含めない）
 - [x] OpenAI Responses APIによる最小化Structured Advice
 - [x] サーバー検証
 - [x] 提案プレビュー
