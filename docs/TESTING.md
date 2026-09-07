@@ -8,9 +8,11 @@ npm run test
 
 `src/**/*.test.ts` に対象データベースへ接続しないテストをco-locateしている（`FakeSupabase`等のモックのみ使用）。`.github/workflows/*.yml` のCIでもこのコマンドのみを実行する。
 
-## Integration tests（ローカル専用、CI対象外）
+## Integration tests
 
-`supabase/tests/**/*.integration.test.ts` は実際のローカルPostgres/Supabase Authに接続し、RLS分離・並列トランザクションなど`FakeSupabase`では検証できない挙動を確認する。**CIでは実行しない。** 本番/共有Supabaseプロジェクトへ接続することも一切ない（`supabase/tests/helpers.ts` の `requireIntegrationEnv()` が `SUPABASE_URL` を `127.0.0.1`/`localhost` 以外へは接続させない）。
+`supabase/tests/**/*.integration.test.ts` は実際のローカルPostgres/Supabase Authに接続し、RLS分離・並列トランザクションなど`FakeSupabase`では検証できない挙動を確認する。本番/共有Supabaseプロジェクトへ接続することは一切ない（`supabase/tests/helpers.ts` の `requireIntegrationEnv()` が `SUPABASE_URL` を `127.0.0.1`/`localhost` 以外へは接続させない）。
+
+CIでは `.github/workflows/integration.yml` が専用ジョブとして、GitHub Actionsランナー上に `supabase start` でローカルスタックを立ててこのスイートを実行する（`.github/workflows/ci.yml` の lint/typecheck/unit/build とは別ジョブ）。ローカルで動かす手順は以下。
 
 ### セットアップ
 
