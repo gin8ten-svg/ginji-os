@@ -52,7 +52,7 @@
 ## Milestone 4 — Planner proposal
 
 - [x] 制約エンジン
-- [x] 優先順位スコア（priority/urgency/overdue。goal_weightは常に0、fragmentation/context_switchは未統合）
+- [x] 優先順位スコア（priority/urgency/overdue。goal_weightは常に0。fragmentation/context_switchは配置アルゴリズム再設計時の将来課題として基礎スコアには含めない）
 - [x] OpenAI Responses APIによる最小化Structured Advice
 - [x] サーバー検証
 - [x] 提案プレビュー
@@ -94,7 +94,15 @@
 TASKS.md記載の全項目を実装済み。
 
 - [x] ローカルSupabase（`supabase start` → `supabase db reset`）で`npm run test:integration`を実行し、RLS分離テストと並列transaction/CASCADE実証を確認する（`docs/TESTING.md`参照。2026-08-18、Docker Desktop起動のうえ実施、16件全パス）。
+- [x] 統合テストを手作業に頼らず回すため、`.github/workflows/integration.yml`でGitHub Actions上に`supabase start`でローカルスタックを立てて毎PR実行するようにした（2026-09-08）。
 - [x] 一連のフロー（ログイン→タスク→計画生成→手動編集→承認→Calendar書込→スキップ→週次レビュー各セクション表示）を本番環境（`ginji-os.vercel.app`）・実Google Calendar接続ありで通しで手動確認した（2026-08-18、2026-08-21）。持ち越し（carried_over）のUI操作のみ未確認のまま残っている。
+
+### 2026-09-08 仕様適合と仕上げ
+
+- Today画面を`docs/DESIGN_RULES.md`の「Today hierarchy」（現在の作業→次の予定→今日の進捗→残りのタイムライン→再計画）へ再構成。`src/lib/today.ts`（`buildTodayView`、テスト付き）と`src/components/today-now.tsx`を追加。
+- 下部ナビに`aria-current="page"`と非色インジケーターを追加、承認モーダルを`ModalShell`（focus trap）へ移行、ログインのエラー文言を補完、保存中の重複操作を無音no-op化。
+- 「Daily planning prototype」等の暫定コピーとREADMEの旧記述（Calendar書き込み未実装の記載）を更新。
+- 未使用だった`fragmentationPenalty`/`contextSwitchPenalty`を削除し、`docs/SCHEDULING_RULES.md`に「配置アルゴリズム再設計時の将来課題」と明記。
 
 ### 2026-08-18の手動確認で発覚し対応した問題
 

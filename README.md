@@ -24,8 +24,8 @@ Planning Engineの案は下書きとして保存し、最新入力による再�
 
 Cloud計画生成は `Idempotency-Key` でretry時の二重保存を防ぎます。承認・却下・更新済みSessionとそのblocksは
 監査snapshotとしてDBレベルで変更不能です。再計算は既存の承認済みSessionを変更せず、新しいdraftを作成します。
-新規計画はtitleを含むPlanning Input Snapshot V2を使用します。Migrationは監査後の適用待ちで、Google Calendar
-Event PreviewとCalendar書き込みはまだ実装していません。
+新規計画はtitleを含むPlanning Input Snapshot V2を使用します。承認済み計画はGoogle Calendar Event Previewで
+確認でき、明示確認後にblock単位の冪等な書き込み・再同期・削除を行います。
 
 Server-onlyのAI設定:
 
@@ -49,5 +49,5 @@ APIキー未設定でも通常のPlanning Engineと承認フローは利用で�
 
 1. Install Node.js 24 LTS and npm.
 2. Run `npm install`.
-3. Start the prototype with `npm run dev`.
+3. Start the dev server with `npm run dev`.
 4. Open `http://localhost:3000`.

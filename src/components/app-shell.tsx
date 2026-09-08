@@ -21,25 +21,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.3em] text-brand-600">Ginji OS</p>
-              <h1 className="text-lg font-semibold">Daily planning prototype</h1>
+              <h1 className="text-lg font-semibold">今日の計画</h1>
             </div>
             <AuthStatus />
           </div>
         </header>
         <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6">{children}</main>
-        <nav className="fixed bottom-0 left-0 right-0 border-t border-slate-200 bg-white/95 backdrop-blur md:static md:mt-4 md:rounded-2xl md:border md:shadow-sm">
+        <nav aria-label="主要メニュー" className="fixed bottom-0 left-0 right-0 border-t border-slate-200 bg-white/95 backdrop-blur md:static md:mt-4 md:rounded-2xl md:border md:shadow-sm">
           <ul className="mx-auto flex max-w-6xl items-stretch justify-around px-2 py-2 sm:px-4">
             {navigation.map((item) => {
-              const active = pathname.startsWith(item.href);
+              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
               return (
                 <li key={item.href} className="flex-1">
                   <Link
                     href={item.href}
-                    className={`flex flex-col items-center rounded-xl px-3 py-2 text-sm font-medium transition ${
+                    aria-current={active ? 'page' : undefined}
+                    className={`relative flex flex-col items-center rounded-xl px-3 py-2 text-sm font-medium transition ${
                       active ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    <span>{item.label}</span>
+                    <span
+                      aria-hidden="true"
+                      className={`absolute inset-x-3 top-0 h-0.5 rounded-full ${active ? 'bg-brand-600' : 'bg-transparent'}`}
+                    />
+                    <span className={active ? 'font-semibold' : undefined}>{item.label}</span>
                   </Link>
                 </li>
               );

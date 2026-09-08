@@ -8,8 +8,9 @@ import { createClient } from '@/lib/supabase/client';
 import { getSupabasePublicEnv } from '@/lib/supabase/env';
 
 const errors: Record<string, string> = {
-  missing_code: '認証情報が返されませんでした。もう一度お試しください。',
-  exchange_failed: 'ログイン処理を完了できませんでした。SupabaseのOAuth設定を確認してください。',
+  oauth_denied: 'Googleでのログインが許可されませんでした。もう一度「Googleで続ける」を押して、アクセスを許可してください。',
+  missing_code: 'Googleから認証情報が返されませんでした。もう一度お試しください。',
+  exchange_failed: 'ログイン処理を完了できませんでした。時間をおいて再度お試しください。続く場合はSupabaseのOAuth設定を確認してください。',
 };
 
 function LoginContent() {
