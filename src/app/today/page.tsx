@@ -54,7 +54,7 @@ export default function TodayPage() {
         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuenow={progress?.percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label="今日の完了率">
           <div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${progress?.percent ?? 0}%` }} />
         </div>
-        <p className="mt-2 text-sm text-slate-600">{progress ? `${progress.doneCount}/${progress.totalCount} 完了・今日締切の残り${progress.remainingMinutes}分` : ''}</p>
+        <p className="mt-2 text-sm text-slate-600">{progress ? `${progress.doneCount}/${progress.totalCount} 完了・残り${progress.remainingMinutes}分` : ''}</p>
       </section>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

@@ -90,14 +90,17 @@ export function buildTodayView(input: {
     allDayEvents.push({ id, title: event.title, htmlLink: event.htmlLink });
   }
 
-  const dueTodayTasks = input.tasks.filter((task) => task.dueAt && tokyoDateKey(new Date(task.dueAt)) === input.today);
   const scheduledRoutines = input.routines.filter((routine) => isRoutineScheduled(routine, input.today));
   const completedRoutineIds = new Set(input.completions.filter((item) => item.date === input.today).map((item) => item.routineId));
+  // 進捗の母数は「今日中に片付けるべきもの」＝ 未完了の期限超過・今日締切タスク
+  // ＋ 今日完了したタスク ＋ 今日のルーティン。Today上部の「要対応タスク」「残り時間」と一致させる。
+  const actionableTasks = input.tasks.filter((task) => !task.completedAt && ['overdue', 'today'].includes(classifyTask(task, input.today)));
+  const completedTodayTasks = input.tasks.filter((task) => task.completedAt && tokyoDateKey(new Date(task.completedAt)) === input.today);
 
-  const doneCount = dueTodayTasks.filter((task) => task.completedAt).length
+  const doneCount = completedTodayTasks.length
     + scheduledRoutines.filter((routine) => completedRoutineIds.has(routine.id)).length;
-  const totalCount = dueTodayTasks.length + scheduledRoutines.length;
-  const remainingMinutes = dueTodayTasks.filter((task) => !task.completedAt).reduce((sum, task) => sum + Math.max(0, task.remainingMinutes), 0)
+  const totalCount = actionableTasks.length + completedTodayTasks.length + scheduledRoutines.length;
+  const remainingMinutes = actionableTasks.reduce((sum, task) => sum + Math.max(0, task.remainingMinutes), 0)
     + scheduledRoutines.filter((routine) => !completedRoutineIds.has(routine.id)).reduce((sum, routine) => sum + routine.estimatedMinutes, 0);
 
   let suggestion: TodaySuggestion | null = null;

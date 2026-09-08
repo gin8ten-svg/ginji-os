@@ -69,6 +69,11 @@ describe('buildTodayView', () => {
     expect(view.progress.remainingMinutes).toBe(80); // 60 (task b) + 20 (routine r1)
   });
 
+  it('期限超過タスクも進捗の母数に入れる', () => {
+    const view = buildTodayView({ ...base, tasks: [task({ id: 'od', dueAt: '2026-07-10T09:00:00+09:00' })] });
+    expect(view.progress).toMatchObject({ doneCount: 0, totalCount: 1, remainingMinutes: 60 });
+  });
+
   it('対象が無ければ進捗率は0', () => {
     expect(buildTodayView(base).progress).toEqual({ doneCount: 0, totalCount: 0, percent: 0, remainingMinutes: 0 });
   });
